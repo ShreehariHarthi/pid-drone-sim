@@ -1092,15 +1092,21 @@
   </div>
 
   <!-- Faculty Portal Tabs -->
-  <div class="flex items-center gap-2 border-b border-slate-200 pb-2">
-    <button id="facTabAnalytics" onclick="switchFacultyTab('analytics')"
-      class="px-4 py-2 rounded-lg text-xs font-bold bg-[#0f2942] text-white transition">
-      Student Analytics Dashboard
-    </button>
-    <button id="facTabRoster" onclick="switchFacultyTab('roster')"
-      class="px-4 py-2 rounded-lg text-xs font-bold bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 transition">
-      Authorized Roster Manager
-    </button>
+  <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
+    <div class="flex items-center gap-2">
+      <button id="facTabAnalytics" onclick="switchFacultyTab('analytics')"
+        class="px-4 py-2 rounded-lg text-xs font-bold bg-[#0f2942] text-white transition">
+        Student Analytics Dashboard
+      </button>
+      <button id="facTabRoster" onclick="switchFacultyTab('roster')"
+        class="px-4 py-2 rounded-lg text-xs font-bold bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 transition">
+        Authorized Roster Manager
+      </button>
+    </div>
+    <div id="facultyCloudBanner" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-300 text-xs mono text-slate-700">
+      <span id="facCloudDot" class="w-2 h-2 rounded-full bg-amber-500"></span>
+      <span id="facCloudText">Checking Firebase...</span>
+    </div>
   </div>
 
   <!-- TAB A: STUDENT ANALYTICS DASHBOARD -->
@@ -1209,10 +1215,17 @@
 
     <!-- Current Authorized Roster Table -->
     <div class="lg:col-span-7 bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col">
-      <div class="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-        <h3 class="text-sm font-bold text-[#0f2942]">Official Authorized Class Roster</h3>
-        <span id="rosterCountBadge" class="mono text-xs font-bold text-[#1d4ed8]">0 Students</span>
+      <div class="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center gap-3">
+          <h3 class="text-sm font-bold text-[#0f2942]">Official Authorized Class Roster</h3>
+          <span id="rosterCountBadge" class="mono text-xs font-bold text-[#1d4ed8]">0 Students</span>
+        </div>
+        <button id="btnPushToCloud" onclick="pushLocalDataToCloud()"
+          class="px-3 py-1.5 rounded-lg bg-[#15803d] hover:bg-[#0f2942] text-white text-xs font-semibold transition">
+          Push Local Roster to Firebase
+        </button>
       </div>
+      <div id="cloudSyncProgressMsg" class="hidden px-4 py-2 text-xs font-semibold border-b border-slate-200"></div>
       <div class="overflow-y-auto max-h-[540px]">
         <table class="w-full text-left border-collapse text-xs">
           <thead>
@@ -1358,6 +1371,7 @@ function saveLocalCaches() {
 let db = null;
 let auth = null;
 let firebaseReady = false;
+let lastFirebaseError = "";
 let unsubAnalytics = null;
 let unsubRoster = null;
 const appId = typeof __app_id !== "undefined" ? __app_id : "chanakya-control-eng-pid";
@@ -1394,6 +1408,23 @@ function setSyncIndicators(label, isConnected) {
   if (lTxt) lTxt.textContent = label;
   if (hDot) hDot.className = dotCls;
   if (hTxt) hTxt.textContent = label;
+  updateFacultyCloudBanner();
+}
+
+function updateFacultyCloudBanner() {
+  const dot = document.getElementById("facCloudDot");
+  const txt = document.getElementById("facCloudText");
+  if (!dot || !txt) return;
+  if (firebaseReady) {
+    dot.className = "w-2 h-2 rounded-full bg-emerald-500";
+    txt.textContent = "Firebase Cloud Connected";
+  } else if (lastFirebaseError) {
+    dot.className = "w-2 h-2 rounded-full bg-red-600";
+    txt.textContent = `Firebase Error: ${lastFirebaseError}`;
+  } else {
+    dot.className = "w-2 h-2 rounded-full bg-amber-500";
+    txt.textContent = "Local Browser Storage Only";
+  }
 }
 
 async function initCloudBackend() {
@@ -1421,15 +1452,21 @@ async function initCloudBackend() {
     }
 
     firebaseReady = true;
+    lastFirebaseError = "";
 
     const rosterSnap = await getDocs(getRosterCol());
-    authorizedRosterCache = [];
-    rosterSnap.forEach(d => authorizedRosterCache.push(d.data()));
-    saveLocalCaches();
+    // Protect local roster: only replace if cloud actually has entries
+    if (!rosterSnap.empty) {
+      authorizedRosterCache = [];
+      rosterSnap.forEach(d => authorizedRosterCache.push(d.data()));
+      saveLocalCaches();
+    }
     setSyncIndicators("Course Database Connected", true);
   } catch (err) {
-    console.warn("Cloud init fallback to local storage:", err);
-    setSyncIndicators("Database Error — Check Auth/Rules", false);
+    console.error("Firebase init error:", err);
+    firebaseReady = false;
+    lastFirebaseError = err.code || err.message || "Unknown error";
+    setSyncIndicators(`DB Error (${lastFirebaseError})`, false);
   }
 }
 
@@ -2977,23 +3014,30 @@ function openFacultyPortal() {
     if (unsubAnalytics) unsubAnalytics();
     if (unsubRoster) unsubRoster();
     unsubAnalytics = onSnapshot(getAnalyticsCol(), snap => {
-      studentAnalyticsCache = [];
-      snap.forEach(d => studentAnalyticsCache.push(d.data()));
-      saveLocalCaches();
-      renderFacultyKPIsAndTable();
+      if (!snap.empty) {
+        studentAnalyticsCache = [];
+        snap.forEach(d => studentAnalyticsCache.push(d.data()));
+        saveLocalCaches();
+        renderFacultyKPIsAndTable();
+      }
     }, err => {
-      console.warn("Analytics listener error:", err);
+      lastFirebaseError = err.code || err.message;
+      updateFacultyCloudBanner();
     });
     unsubRoster = onSnapshot(getRosterCol(), snap => {
-      authorizedRosterCache = [];
-      snap.forEach(d => authorizedRosterCache.push(d.data()));
-      saveLocalCaches();
-      renderFacultyKPIsAndTable();
-      renderRosterTable();
+      if (!snap.empty) {
+        authorizedRosterCache = [];
+        snap.forEach(d => authorizedRosterCache.push(d.data()));
+        saveLocalCaches();
+        renderFacultyKPIsAndTable();
+        renderRosterTable();
+      }
     }, err => {
-      console.warn("Roster listener error:", err);
+      lastFirebaseError = err.code || err.message;
+      updateFacultyCloudBanner();
     });
   }
+  updateFacultyCloudBanner();
   renderFacultyKPIsAndTable();
   renderRosterTable();
 }
@@ -3237,29 +3281,85 @@ async function removeRosterStudent(roll) {
   renderFacultyKPIsAndTable();
 }
 
-function exportClassCSV() {
-  const headers = ["RollNumber", "Name", "Email", "M1_Best", "M2_Best", "M3_Best", "M4_Best", "Quiz_Score", "Quiz_Attempts", "Certified", "LastActive"];
-  const rows = studentAnalyticsCache.map(s => {
-    const m = s.milestones || {};
-    const cert = (m[4]?.passed && s.quizPassed) ? "YES" : "NO";
-    return [
-      s.roll, `"${(s.name || "").replace(/"/g, '""')}"`, s.email || "",
-      m[1]?.bestScore || 0, m[2]?.bestScore || 0, m[3]?.bestScore || 0, m[4]?.bestScore || 0,
-      s.quizBestScore || 0, s.quizAttempts || 0, cert, s.lastActive || ""
-    ].join(",");
-  });
-  const csv = [headers.join(","), ...rows].join("\n");
-  const blob = new Blob([csv], { type: "text/csv" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `Chanakya_ControlEng_PID_Analytics_${new Date().toISOString().slice(0, 10)}.csv`;
-  a.click();
+async function pushLocalDataToCloud() {
+  const msg = document.getElementById("cloudSyncProgressMsg");
+  msg.classList.remove("hidden");
+
+  if (!firebaseReady || !db) {
+    msg.className = "px-4 py-2 text-xs font-semibold border-b border-red-200 bg-red-50 text-[#b91c1c]";
+    msg.textContent = `Cannot sync yet — Firebase is not connected (${lastFirebaseError || "Check Auth & Firestore Rules"}).`;
+    return;
+  }
+
+  msg.className = "px-4 py-2 text-xs font-semibold border-b border-blue-200 bg-blue-50 text-[#1d4ed8]";
+  msg.textContent = `Syncing ${authorizedRosterCache.length} roster entries to Firebase Firestore...`;
+
+  let okRoster = 0;
+  let okAnalytics = 0;
+  try {
+    for (const r of authorizedRosterCache) {
+      await setDoc(doc(getRosterCol(), r.roll), r);
+      okRoster++;
+    }
+    for (const s of studentAnalyticsCache) {
+      await setDoc(doc(getAnalyticsCol(), s.roll), s, { merge: true });
+      okAnalytics++;
+    }
+    msg.className = "px-4 py-2 text-xs font-semibold border-b border-emerald-200 bg-emerald-50 text-[#15803d]";
+    msg.textContent = `✓ Permanent Cloud Sync Complete: ${okRoster} students & ${okAnalytics} analytics records saved to Firebase Firestore!`;
+  } catch (err) {
+    lastFirebaseError = err.code || err.message;
+    updateFacultyCloudBanner();
+    msg.className = "px-4 py-2 text-xs font-semibold border-b border-red-200 bg-red-50 text-[#b91c1c]";
+    msg.textContent = `Sync failed (${lastFirebaseError}). Please check Firestore Rules and Anonymous Auth in Firebase Console.`;
+  }
 }
 
 function escapeHtml(str) {
   return String(str || "").replace(/[&<>"']/g, ch => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   }[ch]));
+}
+
+function exportClassCSV() {
+  const headers = [
+    "Roll Number", "Student Name", "Registered Email",
+    "M1 Best (>=85)", "M2 Best (>=85)", "M3 Best (>=85)", "M4 Best (>=80)",
+    "Quiz Score (/6)", "Quiz Attempts", "Total Trials",
+    "Best Kp", "Best Ki", "Best Kd", "Status", "Last Active"
+  ];
+
+  const rows = studentAnalyticsCache.map(s => {
+    const m = s.milestones || {};
+    const totalTrials = [1, 2, 3, 4].reduce((acc, id) => acc + (m[id]?.trials || 0), 0);
+    const bestG = m[4]?.bestGains || m[3]?.bestGains || m[2]?.bestGains || m[1]?.bestGains || { kp: "", ki: "", kd: "" };
+    const m4Passed = !!(m[4] && m[4].passed);
+    const status = m4Passed && s.quizPassed ? "Certified" : (m4Passed ? "Quiz Pending" : "In Flight");
+    return [
+      s.roll || "",
+      s.name || "",
+      s.email || "",
+      m[1]?.bestScore || 0,
+      m[2]?.bestScore || 0,
+      m[3]?.bestScore || 0,
+      m[4]?.bestScore || 0,
+      s.quizBestScore || 0,
+      s.quizAttempts || 0,
+      totalTrials,
+      bestG.kp,
+      bestG.ki,
+      bestG.kd,
+      status,
+      s.lastActive || ""
+    ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(",");
+  });
+
+  const csvContent = [headers.join(","), ...rows].join("\n");
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `Chanakya_ControlEng_PID_Analytics_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
 }
 
 // ── EXPOSE HANDLERS TO WINDOW & BOOTSTRAP ──────────────────────────────────
@@ -3270,8 +3370,8 @@ Object.assign(window, {
   onGhostToggleChange, submitQuizAttempt, downloadStandaloneReport,
   copyCppCode, downloadCppCode, exportClassCSV, exitFacultyPortal,
   switchFacultyTab, renderFacultyAnalyticsTable, addSingleRosterStudent,
-  bulkImportRoster, removeRosterStudent, openStudentDrillModal,
-  closeStudentDrillModal, selectMilestone, selectQuizOption
+  bulkImportRoster, removeRosterStudent, pushLocalDataToCloud,
+  openStudentDrillModal, closeStudentDrillModal, selectMilestone, selectQuizOption
 });
 
 window.addEventListener("load", () => {
