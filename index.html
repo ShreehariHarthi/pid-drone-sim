@@ -1,0 +1,3382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PID Controller — Drone Flight Simulator | Chanakya University</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    background-color: #f8fafc;
+    color: #0f2942;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    margin: 0;
+    overflow-x: hidden;
+  }
+  .mono { font-family: 'JetBrains Mono', Consolas, monospace; }
+
+  /* Subtle academic scrollbars */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: #f1f5f9; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+  /* Clean engineering range slider */
+  input[type=range] {
+    -webkit-appearance: none;
+    appearance: none;
+    background: #e2e8f0;
+    height: 5px;
+    border-radius: 999px;
+    outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: #1d4ed8;
+    cursor: pointer;
+    border: 2px solid #ffffff;
+    box-shadow: 0 1px 3px rgba(15, 41, 66, 0.35);
+    transition: transform 0.12s ease;
+  }
+  input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.12); }
+
+  /* Live PID pseudocode active line highlight */
+  .code-line {
+    padding: 1px 6px;
+    border-radius: 4px;
+    border-left: 3px solid transparent;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+  }
+  .code-active {
+    background-color: #eff6ff;
+    border-left-color: #1d4ed8;
+    color: #0f2942;
+    font-weight: 600;
+  }
+
+  /* Hold timer stopwatch pulse */
+  @keyframes holdPulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.12); opacity: 0.85; }
+  }
+  .hold-icon-pulse {
+    animation: holdPulse 1s ease-in-out infinite;
+  }
+
+  /* Print styles for Official Lab Report */
+  @media print {
+    body { background: #ffffff !important; color: #0f2942 !important; }
+    .no-print { display: none !important; }
+    #printableReportArea {
+      display: block !important;
+      border: 1px solid #cbd5e1 !important;
+      box-shadow: none !important;
+      margin: 0 !important;
+      padding: 24px !important;
+    }
+  }
+</style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     TOP NAVIGATION BAR (Visible on Phases 2–6)
+     ════════════════════════════════════════════════════════════════════════ -->
+<header id="mainHeader" class="no-print hidden bg-[#0f2942] text-white border-b border-slate-800 px-4 py-2 sticky top-0 z-40 shrink-0">
+  <div class="max-w-[1720px] mx-auto flex flex-wrap items-center justify-between gap-2">
+    <!-- Institutional Typography Only (No Logo) -->
+    <div>
+      <div class="text-xs sm:text-sm font-bold tracking-[0.14em] uppercase text-white leading-tight">
+        CHANAKYA UNIVERSITY
+      </div>
+      <div class="text-[11px] text-slate-300 leading-tight mt-0.5">
+        Course: Control Engineering <span class="text-slate-500 mx-1">|</span> PID Controller — Drone Flight Simulator
+      </div>
+    </div>
+
+    <!-- Stepper Navigation -->
+    <nav id="studentNavStepper" class="flex items-center gap-1 overflow-x-auto py-0.5">
+      <button onclick="navigatePhase(2)" id="navBtn2" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition">
+        1. Theory
+      </button>
+      <span class="text-slate-500 text-xs">/</span>
+      <button onclick="navigatePhase(3)" id="navBtn3" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition">
+        2. Problem Statement
+      </button>
+      <span class="text-slate-500 text-xs">/</span>
+      <button onclick="navigatePhase(4)" id="navBtn4" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition">
+        3. Flight Simulator
+      </button>
+      <span class="text-slate-500 text-xs">/</span>
+      <button onclick="navigatePhase(5)" id="navBtn5" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition">
+        4. Certification Quiz
+      </button>
+      <span class="text-slate-500 text-xs">/</span>
+      <button onclick="navigatePhase(6)" id="navBtn6" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition">
+        5. Report &amp; C++ Export
+      </button>
+    </nav>
+
+    <!-- Student Identity & Exit -->
+    <div class="flex items-center gap-2">
+      <div id="headerSyncStatus" class="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/10 text-[11px] mono text-slate-200">
+        <span id="headerSyncDot" class="w-2 h-2 rounded-full bg-slate-400"></span>
+        <span id="headerSyncText">Syncing...</span>
+      </div>
+      <div class="bg-white/10 border border-white/15 rounded-lg px-2.5 py-1 text-right">
+        <div id="hdrStudentName" class="text-xs font-semibold text-white leading-tight">Student</div>
+        <div id="hdrStudentRoll" class="text-[10px] mono text-slate-300 leading-tight">ROLL</div>
+      </div>
+      <button onclick="logoutToLogin()" class="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold border border-white/20 transition">
+        Sign Out
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     PHASE 1: AUTHORIZED STUDENT LOGIN PAGE
+     ════════════════════════════════════════════════════════════════════════ -->
+<section id="phase1View" class="no-print flex-1 flex flex-col justify-between p-4 sm:p-8">
+  <!-- Top Institutional Bar -->
+  <div class="max-w-5xl w-full mx-auto flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200">
+    <div class="flex items-center gap-2 text-xs text-slate-600">
+      <span id="loginSyncDot" class="w-2 h-2 rounded-full bg-slate-400"></span>
+      <span id="loginSyncText" class="mono">Connecting to Course Database...</span>
+    </div>
+    <button onclick="openFacultyPinModal()"
+      class="px-3.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-[#0f2942] border border-slate-300 text-xs font-semibold transition">
+      Faculty Portal
+    </button>
+  </div>
+
+  <!-- Centered Academic Login Card -->
+  <div class="max-w-5xl w-full mx-auto my-8 grid lg:grid-cols-12 bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+
+    <!-- Left Academic Specification Panel -->
+    <div class="lg:col-span-7 p-7 sm:p-10 bg-[#0f2942] text-white flex flex-col justify-between">
+      <div>
+        <div class="border-b border-white/15 pb-5">
+          <div class="text-xs font-bold uppercase tracking-[0.2em] text-slate-300">
+            CHANAKYA UNIVERSITY
+          </div>
+          <div class="inline-block mt-2 px-2.5 py-1 rounded bg-white/10 border border-white/15 text-xs font-semibold text-white">
+            Course: Control Engineering
+          </div>
+        </div>
+
+        <div class="mt-6">
+          <div class="text-[11px] font-semibold uppercase tracking-widest text-slate-300">
+            Interactive Control Systems Laboratory
+          </div>
+          <h1 class="text-2xl sm:text-3xl font-bold text-white mt-1.5 leading-snug">
+            PID Controller — Drone Flight Simulator
+          </h1>
+          <p class="text-sm text-slate-300 mt-3 leading-relaxed">
+            Design, analyze, and tune a closed-loop Proportional-Integral-Derivative vertical altitude controller for a <span class="mono text-white font-semibold">1.50 kg</span> quadcopter (<span class="mono text-white font-semibold">W = 14.72 N</span>). Review the mandatory theory modules, execute all four autonomous flight milestones under live wind gusts, and complete the 6-question certification quiz to export your firmware.
+          </p>
+        </div>
+
+        <!-- Technical Lab Specifications -->
+        <div class="grid sm:grid-cols-3 gap-3 mt-6">
+          <div class="bg-white/5 border border-white/10 rounded-xl p-3">
+            <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Drone Model</div>
+            <div class="mono text-xs font-bold text-white mt-1">m = 1.50 kg</div>
+            <div class="mono text-[11px] text-slate-300">W = 14.72 N</div>
+          </div>
+          <div class="bg-white/5 border border-white/10 rounded-xl p-3">
+            <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Pass Cutoffs</div>
+            <div class="mono text-xs font-bold text-white mt-1">M1–M3: &ge; 85</div>
+            <div class="mono text-[11px] text-slate-300">M4 Final: &ge; 80</div>
+          </div>
+          <div class="bg-white/5 border border-white/10 rounded-xl p-3">
+            <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Initial Gains</div>
+            <div class="mono text-xs font-bold text-white mt-1">Kp=0, Ki=0, Kd=0</div>
+            <div class="mono text-[11px] text-slate-300">Analytical Tuning</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-8 pt-4 border-t border-white/15 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div class="text-slate-300">
+          Designed and Developed by: <strong class="text-white font-semibold">Prof. Shreehari H S</strong>
+        </div>
+        <div class="mono text-[11px] text-slate-400">Authorized Roster Access</div>
+      </div>
+    </div>
+
+    <!-- Right Authorized Login Form -->
+    <div class="lg:col-span-5 p-7 sm:p-10 bg-white flex flex-col justify-center">
+      <div class="mb-6">
+        <h2 class="text-xl font-bold text-[#0f2942]">Authorized Student Login</h2>
+        <p class="text-xs text-slate-600 mt-1">
+          Access is restricted to students registered on the official Control Engineering roster.
+        </p>
+      </div>
+
+      <form id="loginForm" onsubmit="handleStudentLogin(event)" class="space-y-4">
+        <div>
+          <label for="inputStudentRoll" class="block text-xs font-semibold text-[#0f2942] uppercase tracking-wider mb-1.5">
+            University Roll Number
+          </label>
+          <input type="text" id="inputStudentRoll" required placeholder="Enter your university roll number"
+            class="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 border border-slate-300 text-[#0f2942] text-sm mono uppercase focus:outline-none focus:bg-white focus:border-[#1d4ed8] transition">
+        </div>
+
+        <div>
+          <label for="inputStudentEmail" class="block text-xs font-semibold text-[#0f2942] uppercase tracking-wider mb-1.5">
+            Registered Email ID
+          </label>
+          <input type="email" id="inputStudentEmail" required placeholder="Enter your registered email ID"
+            class="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 border border-slate-300 text-[#0f2942] text-sm focus:outline-none focus:bg-white focus:border-[#1d4ed8] transition">
+        </div>
+
+        <div>
+          <label for="inputStudentName" class="block text-xs font-semibold text-[#0f2942] uppercase tracking-wider mb-1.5">
+            Full Name <span class="font-normal text-slate-500 normal-case">(for lab report &amp; records)</span>
+          </label>
+          <input type="text" id="inputStudentName" required placeholder="Enter your full name"
+            class="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 border border-slate-300 text-[#0f2942] text-sm focus:outline-none focus:bg-white focus:border-[#1d4ed8] transition">
+        </div>
+
+        <div id="loginErrorMsg" class="hidden p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-[#b91c1c] leading-relaxed font-medium"></div>
+
+        <button type="submit" id="btnStudentLogin"
+          class="w-full py-3 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white font-semibold text-sm transition">
+          Verify Credentials &amp; Enter Lab
+        </button>
+      </form>
+
+      <div class="mt-6 pt-5 border-t border-slate-200 text-[11px] text-slate-500 leading-relaxed">
+        <div class="font-semibold text-slate-700 mb-1">Roster Verification Policy</div>
+        Your Roll Number and Registered Email ID must match the official course roster maintained by Prof. Shreehari H S.
+      </div>
+    </div>
+  </div>
+
+  <!-- Minimal Academic Footer -->
+  <footer class="max-w-5xl w-full mx-auto text-center text-xs text-slate-500 pt-2">
+    CHANAKYA UNIVERSITY &bull; Course: Control Engineering &bull; Designed and Developed by: Prof. Shreehari H S
+  </footer>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     PHASE 2: MANDATORY ENGINEERING THEORY MODULES
+     ════════════════════════════════════════════════════════════════════════ -->
+<section id="phase2View" class="no-print hidden flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 space-y-6">
+
+  <!-- Phase 2 Header -->
+  <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-wrap items-center justify-between gap-4">
+    <div>
+      <div class="text-xs font-bold uppercase tracking-wider text-[#1d4ed8]">Phase 1 &bull; Mandatory Theoretical Foundation</div>
+      <h2 class="text-2xl font-bold text-[#0f2942] mt-0.5">Vertical Thrust Modeling, Analytical PID Tuning &amp; 6-DOF Context</h2>
+      <p class="text-xs text-slate-600 mt-1">
+        Read all 3 engineering modules below and mark each section understood to unlock the Problem Statement and Flight Simulator. After completing all flight milestones, you will take the 6-question certification quiz.
+      </p>
+    </div>
+    <div class="flex items-center gap-3">
+      <div class="px-3.5 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+        <span class="text-slate-500">Modules Read:</span>
+        <span id="theoryProgressBadge" class="mono font-bold text-[#1d4ed8] ml-1">0 / 3</span>
+      </div>
+      <button id="btnUnlockBriefingTop" onclick="navigatePhase(3)" disabled
+        class="px-4 py-2 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition">
+        Proceed to Problem Statement &rarr;
+      </button>
+    </div>
+  </div>
+
+  <!-- MODULE 1: Drone Vertical Thrust Physics Model -->
+  <article class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+      <div>
+        <span class="text-[11px] font-bold uppercase tracking-wider text-[#1d4ed8]">Module 1 of 3</span>
+        <h3 class="text-lg font-bold text-[#0f2942]">Drone Vertical Thrust Physics Model</h3>
+      </div>
+      <button id="btnMarkMod1" onclick="toggleTheoryModule(1)"
+        class="px-3.5 py-1.5 rounded-lg border text-xs font-semibold transition bg-slate-50 border-slate-300 text-[#0f2942] hover:border-[#1d4ed8]">
+        Mark Section Understood
+      </button>
+    </div>
+
+    <!-- Physical Constants Strip -->
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-3">
+        <div class="text-[10px] font-semibold uppercase text-slate-500">Assumed Mass (m)</div>
+        <div class="mono text-base font-bold text-[#0f2942] mt-0.5">1.50 kg</div>
+      </div>
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-3">
+        <div class="text-[10px] font-semibold uppercase text-slate-500">Gravity (g)</div>
+        <div class="mono text-base font-bold text-[#0f2942] mt-0.5">9.81 m/s&sup2;</div>
+      </div>
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-3">
+        <div class="text-[10px] font-semibold uppercase text-slate-500">Weight (W = mg)</div>
+        <div class="mono text-base font-bold text-[#b91c1c] mt-0.5">14.72 N</div>
+      </div>
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-3">
+        <div class="text-[10px] font-semibold uppercase text-slate-500">Hover Thrust (T_hov)</div>
+        <div class="mono text-base font-bold text-[#1d4ed8] mt-0.5">14.72 N</div>
+      </div>
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-3">
+        <div class="text-[10px] font-semibold uppercase text-slate-500">Max Thrust (T_max)</div>
+        <div class="mono text-base font-bold text-[#0f2942] mt-0.5">30.00 N</div>
+      </div>
+    </div>
+
+    <div class="grid lg:grid-cols-12 gap-5 items-center">
+      <div class="lg:col-span-8 space-y-3 text-sm text-slate-700 leading-relaxed">
+        <p>
+          Applying <strong>Newton&rsquo;s Second Law</strong> along the vertical axis (<span class="mono">z</span> positive upward), the vertical acceleration <span class="mono">a_z</span> of the quadcopter is determined by the net vertical force acting on its mass <span class="mono">m = 1.50 kg</span>:
+        </p>
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 mono text-xs sm:text-sm text-[#0f2942] font-semibold">
+          m &middot; a_z = T_total &minus; m&middot;g &minus; c&middot;v_z + F_wind
+          <div class="text-xs font-normal text-slate-500 mt-1.5">
+            where T_total &isin; [0, 30.00 N], m&middot;g = 14.72 N, air drag c = 0.15 N&middot;s/m, and F_wind is vertical gust force (N).
+          </div>
+        </div>
+        <div class="grid sm:grid-cols-3 gap-3 text-xs pt-1">
+          <div class="p-3 rounded-lg bg-slate-50 border border-slate-200">
+            <div class="font-bold text-[#1d4ed8] mono">T_total &gt; 14.72 N</div>
+            <p class="text-slate-600 mt-1">Net upward force (<span class="mono">F_net &gt; 0</span>): drone accelerates upward and climbs.</p>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-50 border border-slate-200">
+            <div class="font-bold text-[#15803d] mono">T_total = 14.72 N</div>
+            <p class="text-slate-600 mt-1">Force equilibrium (<span class="mono">F_net = 0</span>): drone maintains steady hover (<span class="mono">a_z = 0</span>).</p>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-50 border border-slate-200">
+            <div class="font-bold text-[#b91c1c] mono">T_total &lt; 14.72 N</div>
+            <p class="text-slate-600 mt-1">Net downward force (<span class="mono">F_net &lt; 0</span>): gravity overcomes thrust and drone descends.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Free-Body Diagram SVG -->
+      <div class="lg:col-span-4 bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col items-center">
+        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">Vertical Free-Body Diagram</div>
+        <svg viewBox="0 0 240 190" class="w-full max-w-[230px] h-auto" role="img" aria-label="Drone Vertical Free Body Diagram">
+          <line x1="120" y1="84" x2="120" y2="24" stroke="#1d4ed8" stroke-width="3"/>
+          <polygon points="120,16 113,28 127,28" fill="#1d4ed8"/>
+          <text x="130" y="34" font-family="JetBrains Mono, monospace" font-size="11" font-weight="700" fill="#1d4ed8">T_total (0–30 N)</text>
+
+          <line x1="65" y1="95" x2="175" y2="95" stroke="#0f2942" stroke-width="4" stroke-linecap="round"/>
+          <rect x="96" y="85" width="48" height="20" rx="4" fill="#0f2942"/>
+          <text x="120" y="99" font-family="JetBrains Mono, monospace" font-size="10" font-weight="700" fill="#ffffff" text-anchor="middle">1.50 kg</text>
+          <line x1="56" y1="88" x2="82" y2="88" stroke="#1d4ed8" stroke-width="2.5"/>
+          <line x1="158" y1="88" x2="184" y2="88" stroke="#1d4ed8" stroke-width="2.5"/>
+
+          <line x1="120" y1="106" x2="120" y2="164" stroke="#b91c1c" stroke-width="3"/>
+          <polygon points="120,174 113,162 127,162" fill="#b91c1c"/>
+          <text x="130" y="160" font-family="JetBrains Mono, monospace" font-size="11" font-weight="700" fill="#b91c1c">W = mg = 14.72 N</text>
+        </svg>
+      </div>
+    </div>
+  </article>
+
+  <!-- MODULE 2: PID Equation & Analytical Gain Calculation -->
+  <article class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+      <div>
+        <span class="text-[11px] font-bold uppercase tracking-wider text-[#1d4ed8]">Module 2 of 3</span>
+        <h3 class="text-lg font-bold text-[#0f2942]">PID Thrust Equation &amp; Analytical Gain Calculation (K_p, K_i, K_d)</h3>
+      </div>
+      <button id="btnMarkMod2" onclick="toggleTheoryModule(2)"
+        class="px-3.5 py-1.5 rounded-lg border text-xs font-semibold transition bg-slate-50 border-slate-300 text-[#0f2942] hover:border-[#1d4ed8]">
+        Mark Section Understood
+      </button>
+    </div>
+
+    <div class="text-sm text-slate-700 leading-relaxed space-y-3">
+      <p>
+        Given a desired target altitude <span class="mono font-semibold text-[#0f2942]">z_set</span> and measured altitude <span class="mono font-semibold text-[#0f2942]">z(t)</span>, the altitude tracking error is <span class="mono font-semibold">e(t) = z_set &minus; z(t)</span>. The PID controller computes the vertical thrust command (in Newtons):
+      </p>
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 mono text-xs sm:text-sm text-[#0f2942] font-semibold">
+        T_PID(t) = K_p &middot; e(t) + K_i &middot; &int;e(t)dt + K_d &middot; (de/dt)
+        <span class="block text-xs font-normal text-slate-500 mt-1">
+          (Using derivative-on-measurement to prevent setpoint kick: de/dt = &minus;v_z during constant setpoint)
+        </span>
+      </div>
+
+      <p>
+        Substituting a PD controller into Newton&rsquo;s 2nd Law (<span class="mono">m&middot;z&Prime; + K_d&middot;z&prime; + K_p&middot;z = K_p&middot;z_set</span>) yields the standard <strong>second-order closed-loop characteristic equation</strong>:
+      </p>
+
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2">
+          <div class="text-xs font-bold uppercase tracking-wider text-[#1d4ed8]">Analytical Gain Formulas</div>
+          <div class="mono text-xs text-[#0f2942] bg-white border border-slate-200 rounded-lg p-2.5">
+            s&sup2; + (K_d / m)&middot;s + (K_p / m) = s&sup2; + 2&zeta;&omega;_n&middot;s + &omega;_n&sup2;
+          </div>
+          <ul class="text-xs space-y-1.5 text-slate-700 pt-1">
+            <li><strong class="mono text-[#0f2942]">K_p = m &middot; &omega;_n&sup2;</strong> &mdash; Sets response speed via natural frequency <span class="mono">&omega;_n</span> (rad/s).</li>
+            <li><strong class="mono text-[#0f2942]">K_d = 2 &middot; &zeta; &middot; &omega;_n &middot; m = 2&zeta;&radic;(m &middot; K_p)</strong> &mdash; Sets damping ratio <span class="mono">&zeta;</span> (<span class="mono">&zeta; = 1.0</span> gives critical damping with zero overshoot).</li>
+            <li><strong class="mono text-[#0f2942]">K_i &lt; (K_p &middot; K_d) / m</strong> &mdash; Per Routh-Hurwitz stability criterion. <span class="mono">K_i</span> builds <span class="mono">I_term &rarr; 14.72 N</span> to cancel gravity droop when <span class="mono">e = 0</span>, without causing integral windup.</li>
+          </ul>
+        </div>
+
+        <div class="bg-[#eff6ff] border border-blue-200 rounded-xl p-4 space-y-2">
+          <div class="text-xs font-bold uppercase tracking-wider text-[#1d4ed8]">Worked Numerical Example (m = 1.50 kg)</div>
+          <p class="text-xs text-slate-700">
+            Suppose we want a crisp, critically damped response (<span class="mono font-semibold">&zeta; = 1.0</span>) with natural frequency <span class="mono font-semibold">&omega;_n = 1.40 rad/s</span> for a 50 m takeoff or 10 m step-down:
+          </p>
+          <div class="mono text-xs text-[#0f2942] bg-white border border-blue-200 rounded-lg p-3 space-y-1">
+            <div>1. K_p = 1.50 &times; (1.40)&sup2; = <strong>2.94 N/m</strong></div>
+            <div>2. K_d = 2 &times; 1.0 &times; 1.40 &times; 1.50 = <strong>4.20 N&middot;s/m</strong></div>
+            <div>3. Routh-Hurwitz Limit: K_i &lt; (2.94 &times; 4.20) / 1.50 = <strong>8.23</strong></div>
+            <div>4. Practical K_i (to hold 14.72 N): <strong>0.80 &ndash; 1.40 N/(m&middot;s)</strong></div>
+          </div>
+          <p class="text-[11px] text-slate-600">
+            Note: In the simulator, sliders start at <span class="mono font-semibold">0.00</span>. Use these formulas to calculate your starting gains instead of guessing blindly.
+          </p>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <!-- MODULE 3: Why Only Vertical Lift (1-DOF) vs. Real 6-DOF Flight -->
+  <article class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+      <div>
+        <span class="text-[11px] font-bold uppercase tracking-wider text-[#1d4ed8]">Module 3 of 3</span>
+        <h3 class="text-lg font-bold text-[#0f2942]">Why Only Vertical Lift (1-DOF) Is Simulated vs. Real 6-DOF Quadcopter Flight</h3>
+      </div>
+      <button id="btnMarkMod3" onclick="toggleTheoryModule(3)"
+        class="px-3.5 py-1.5 rounded-lg border text-xs font-semibold transition bg-slate-50 border-slate-300 text-[#0f2942] hover:border-[#1d4ed8]">
+        Mark Section Understood
+      </button>
+    </div>
+
+    <div class="grid lg:grid-cols-12 gap-5 items-center">
+      <div class="lg:col-span-6 text-sm text-slate-700 leading-relaxed space-y-2.5">
+        <p>
+          A real physical quadcopter moves in <strong>6 Degrees of Freedom (6-DOF)</strong>: three translational axes (<span class="mono">X, Y, Z</span>) and three rotational angles (<strong>Roll &phi;</strong>, <strong>Pitch &theta;</strong>, <strong>Yaw &psi;</strong>).
+        </p>
+        <p>
+          <strong>Why pure vertical lift is impossible alone in reality:</strong> If you run <em>only</em> an altitude PID controller on a real drone without attitude stabilization, any minor propeller imbalance or air disturbance tilts the drone. Because vertical lift drops as <span class="mono font-semibold text-[#0f2942]">T_z = T &middot; cos(&phi;) &middot; cos(&theta;)</span> and horizontal thrust accelerates the craft sideways, an unstabilized quadcopter flips upside down and crashes in <strong>under 0.2 seconds</strong>.
+        </p>
+        <p>
+          <strong>Cascaded Control Architecture:</strong> Real flight controllers solve this with two nested loops. A fast <strong>Inner Attitude Loop (400&ndash;1000 Hz)</strong> continuously drives Roll &amp; Pitch to zero (<span class="mono">&phi; &approx; 0, &theta; &approx; 0</span>) while GPS/Optical Flow holds <span class="mono">X, Y</span>. Only because this inner loop holds the airframe level can the slower <strong>Outer Altitude Loop (50&ndash;60 Hz)</strong> treat vertical motion as an isolated 1-DOF vertical lift system&mdash;which is the exact loop you are designing in this lab.
+        </p>
+      </div>
+
+      <!-- Inline SVG Cascaded Control Architecture Diagram -->
+      <div class="lg:col-span-6 bg-slate-50 border border-slate-200 rounded-xl p-4">
+        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2 text-center">
+          Real Quadcopter Cascaded Control Architecture (6-DOF)
+        </div>
+        <svg viewBox="0 0 600 220" class="w-full h-auto" role="img" aria-label="Cascaded Quadcopter Control Architecture">
+          <defs>
+            <marker id="arrowNavy" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#0f2942"/>
+            </marker>
+            <marker id="arrowBlue" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#1d4ed8"/>
+            </marker>
+          </defs>
+
+          <rect x="8" y="14" width="215" height="122" rx="8" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.5" stroke-dasharray="5 3"/>
+          <text x="16" y="30" font-family="Inter, sans-serif" font-size="10" font-weight="700" fill="#1d4ed8">OUTER LOOP (50–60 Hz) — THIS LAB</text>
+
+          <rect x="236" y="14" width="184" height="122" rx="8" fill="#ffffff" stroke="#0f2942" stroke-width="1.5" stroke-dasharray="5 3"/>
+          <text x="244" y="30" font-family="Inter, sans-serif" font-size="10" font-weight="700" fill="#0f2942">INNER LOOP (400–1000 Hz)</text>
+
+          <text x="16" y="72" font-family="JetBrains Mono, monospace" font-size="10" font-weight="700" fill="#0f2942">z_set</text>
+          <line x1="48" y1="68" x2="72" y2="68" stroke="#1d4ed8" stroke-width="1.8" marker-end="url(#arrowBlue)"/>
+
+          <rect x="76" y="46" width="134" height="44" rx="6" fill="#1d4ed8"/>
+          <text x="143" y="65" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">Altitude PID</text>
+          <text x="143" y="80" font-family="JetBrains Mono, monospace" font-size="9" fill="#dbeafe" text-anchor="middle">Outputs Thrust T</text>
+
+          <line x1="210" y1="68" x2="246" y2="68" stroke="#0f2942" stroke-width="1.8" marker-end="url(#arrowNavy)"/>
+
+          <rect x="250" y="42" width="158" height="52" rx="6" fill="#0f2942"/>
+          <text x="329" y="61" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#ffffff" text-anchor="middle">Attitude PID + Mixer</text>
+          <text x="329" y="76" font-family="JetBrains Mono, monospace" font-size="9" fill="#cbd5e1" text-anchor="middle">Holds Roll &phi;&approx;0, Pitch &theta;&approx;0</text>
+          <text x="329" y="88" font-family="JetBrains Mono, monospace" font-size="9" fill="#cbd5e1" text-anchor="middle">+ GPS X,Y Hold</text>
+
+          <line x1="408" y1="68" x2="438" y2="68" stroke="#0f2942" stroke-width="1.8" marker-end="url(#arrowNavy)"/>
+
+          <rect x="442" y="42" width="144" height="52" rx="6" fill="#ffffff" stroke="#0f2942" stroke-width="2"/>
+          <text x="514" y="62" font-family="Inter, sans-serif" font-size="11" font-weight="700" fill="#0f2942" text-anchor="middle">6-DOF Quadcopter</text>
+          <text x="514" y="77" font-family="JetBrains Mono, monospace" font-size="9" fill="#475569" text-anchor="middle">T_z = T&middot;cos(&phi;)&middot;cos(&theta;)</text>
+          <text x="514" y="89" font-family="JetBrains Mono, monospace" font-size="9" fill="#1d4ed8" text-anchor="middle">4 Motors (PWM)</text>
+
+          <path d="M514 94 L514 152 L329 152 L329 98" fill="none" stroke="#0f2942" stroke-width="1.6" marker-end="url(#arrowNavy)"/>
+          <rect x="378" y="141" width="108" height="20" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/>
+          <text x="432" y="154" font-family="JetBrains Mono, monospace" font-size="9" fill="#0f2942" text-anchor="middle">IMU (&phi;, &theta;, &psi;)</text>
+
+          <path d="M545 94 L545 192 L143 192 L143 94" fill="none" stroke="#1d4ed8" stroke-width="1.6" marker-end="url(#arrowBlue)"/>
+          <rect x="240" y="181" width="160" height="20" rx="4" fill="#eff6ff" stroke="#93c5fd"/>
+          <text x="320" y="194" font-family="JetBrains Mono, monospace" font-size="9" font-weight="600" fill="#1d4ed8" text-anchor="middle">LiDAR / Barometer (Altitude z)</text>
+        </svg>
+      </div>
+    </div>
+  </article>
+
+  <!-- Theory Completion Action Bar -->
+  <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
+    <div id="theoryActionStatus" class="text-xs font-medium text-slate-600">
+      Mark all 3 engineering theory modules above as understood to unlock the Problem Statement and Flight Simulator.
+    </div>
+    <button id="btnUnlockBriefing" onclick="navigatePhase(3)" disabled
+      class="px-6 py-2.5 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white font-semibold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition">
+      Proceed to Problem Statement &rarr;
+    </button>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     PHASE 3: PROBLEM STATEMENT & FLIGHT PROFILE BRIEFING
+     ════════════════════════════════════════════════════════════════════════ -->
+<section id="phase3View" class="no-print hidden flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6 flex flex-col justify-center">
+  <div class="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 shadow-sm space-y-6">
+    <div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-4">
+      <div>
+        <div class="text-xs font-bold uppercase tracking-wider text-[#1d4ed8]">Phase 2 &bull; Engineering Problem Statement</div>
+        <h2 class="text-2xl font-bold text-[#0f2942] mt-0.5">Autonomous Multi-Stage Ascent, Hover &amp; Touchdown</h2>
+      </div>
+      <button onclick="navigatePhase(4)"
+        class="px-5 py-2.5 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white font-semibold text-xs transition">
+        Open Flight Simulator &rarr;
+      </button>
+    </div>
+
+    <!-- Trajectory Diagram -->
+    <div class="bg-slate-50 border border-slate-200 rounded-xl p-4">
+      <div class="flex flex-wrap items-center justify-between gap-2 text-xs mb-2">
+        <span class="font-bold text-[#0f2942] uppercase tracking-wider">Required Autonomous Altitude Profile</span>
+        <span class="mono text-[#1d4ed8] font-semibold">0m &rarr; 50m (10s) &rarr; 40m (10s) &rarr; 30m (10s) &rarr; 20m [Gear+10s] &rarr; 0m (Direct Descent)</span>
+      </div>
+      <svg viewBox="0 0 840 230" class="w-full h-auto" role="img" aria-label="Target Altitude Flight Profile">
+        <g stroke="#e2e8f0" stroke-width="1" stroke-dasharray="4 4">
+          <line x1="50" y1="30" x2="810" y2="30" />
+          <line x1="50" y1="64" x2="810" y2="64" />
+          <line x1="50" y1="98" x2="810" y2="98" />
+          <line x1="50" y1="132" x2="810" y2="132" />
+          <line x1="50" y1="166" x2="810" y2="166" />
+          <line x1="50" y1="200" x2="810" y2="200" stroke-dasharray="none" stroke="#94a3b8" stroke-width="1.5"/>
+        </g>
+        <g fill="#475569" font-family="JetBrains Mono, monospace" font-size="11" text-anchor="end">
+          <text x="42" y="34">50m</text>
+          <text x="42" y="68">40m</text>
+          <text x="42" y="102">30m</text>
+          <text x="42" y="136">20m</text>
+          <text x="42" y="170">10m</text>
+          <text x="42" y="204">0m</text>
+        </g>
+        <polyline fill="none" stroke="#1d4ed8" stroke-width="3" stroke-linejoin="round"
+          points="60,200 130,30 240,30 275,64 385,64 420,98 530,98 565,132 675,132 800,200" />
+        <circle cx="60" cy="200" r="5" fill="#0f2942"/>
+        <circle cx="130" cy="30" r="4.5" fill="#1d4ed8"/>
+        <circle cx="275" cy="64" r="4.5" fill="#1d4ed8"/>
+        <circle cx="420" cy="98" r="4.5" fill="#1d4ed8"/>
+        <circle cx="565" cy="132" r="6" fill="#0f2942" stroke="#ffffff" stroke-width="1.5"/>
+        <circle cx="800" cy="200" r="6" fill="#15803d" stroke="#ffffff" stroke-width="1.5"/>
+        <g font-family="Inter, sans-serif" font-size="10" font-weight="600">
+          <text x="68" y="190" fill="#0f2942">1. Launch (0m)</text>
+          <text x="138" y="22" fill="#1d4ed8">2. Ascend &amp; Hold 10s (50m)</text>
+          <text x="283" y="56" fill="#334155">Hold 10s (40m)</text>
+          <text x="428" y="90" fill="#334155">Hold 10s (30m)</text>
+          <text x="550" y="118" fill="#0f2942">3. Deploy Gear + 10s (20m)</text>
+          <text x="694" y="158" fill="#1d4ed8">Direct Descent (20m &rarr; 0m)</text>
+          <text x="652" y="218" fill="#15803d">4. Soft Touchdown (&le; 0.6 m/s)</text>
+        </g>
+      </svg>
+    </div>
+
+    <!-- Real-World Transition Note -->
+    <div class="bg-[#eff6ff] border border-blue-200 rounded-xl p-4 text-xs text-slate-700 leading-relaxed">
+      <strong class="text-[#0f2942]">Real-World Transition Note:</strong> The vertical PID altitude loop you tune in this simulation represents the <strong>Outer Altitude Loop</strong> of a real quadcopter. On physical hardware, this loop sits above a 400&ndash;1000 Hz <strong>Inner Attitude Stabilization Loop</strong> (Roll, Pitch, Yaw) that keeps the airframe level so your commanded vertical thrust <span class="mono">T</span> acts straight upward.
+    </div>
+
+    <!-- 4 Milestone Overview Cards -->
+    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5">
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-[#0f2942]">Milestone 1</span>
+          <span class="mono text-[10px] font-bold text-[#1d4ed8] bg-blue-50 px-2 py-0.5 rounded border border-blue-200">Pass &ge; 85</span>
+        </div>
+        <div class="font-semibold text-slate-700 mt-1">Takeoff &amp; PD Damping</div>
+        <p class="text-[11px] text-slate-600 mt-1">0m &rarr; 50m (5s hold) under compulsory wind gusts. Gravity feedforward ON (14.72 N). Apply analytical Kp &amp; Kd formulas.</p>
+      </div>
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5">
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-[#0f2942]">Milestone 2</span>
+          <span class="mono text-[10px] font-bold text-[#1d4ed8] bg-blue-50 px-2 py-0.5 rounded border border-blue-200">Pass &ge; 85</span>
+        </div>
+        <div class="font-semibold text-slate-700 mt-1">Uncompensated Gravity</div>
+        <p class="text-[11px] text-slate-600 mt-1">0m &rarr; 50m (10s hold) under compulsory wind gusts. Feedforward OFF. Tune Ki so I_term carries the full 14.72 N weight.</p>
+      </div>
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5">
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-[#0f2942]">Milestone 3</span>
+          <span class="mono text-[10px] font-bold text-[#1d4ed8] bg-blue-50 px-2 py-0.5 rounded border border-blue-200">Pass &ge; 85</span>
+        </div>
+        <div class="font-semibold text-slate-700 mt-1">Step-Downs, Gear &amp; Wind</div>
+        <p class="text-[11px] text-slate-600 mt-1">0m &rarr; 50m &rarr; 40m &rarr; 30m &rarr; 20m (Auto Gear + 10s) under compulsory &plusmn;2.5 N vertical wind gusts.</p>
+      </div>
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5">
+        <div class="flex items-center justify-between">
+          <span class="font-bold text-[#0f2942]">Milestone 4</span>
+          <span class="mono text-[10px] font-bold text-[#15803d] bg-green-50 px-2 py-0.5 rounded border border-green-200">Pass &ge; 80</span>
+        </div>
+        <div class="font-semibold text-slate-700 mt-1">Full Autonomous Touchdown</div>
+        <p class="text-[11px] text-slate-600 mt-1">Complete 0m &rarr; 50m &rarr; 40m &rarr; 30m &rarr; 20m [Gear+10s] &rarr; 0m direct controlled descent &amp; soft landing (&le; 0.6 m/s) in wind gusts.</p>
+      </div>
+    </div>
+
+    <div class="flex justify-end">
+      <button onclick="navigatePhase(4)"
+        class="px-7 py-3 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white font-semibold text-sm transition">
+        Proceed to Flight Simulator &rarr;
+      </button>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     PHASE 4: SINGLE-SCREEN ZERO-SCROLL FLIGHT SIMULATOR WORKSPACE
+     ════════════════════════════════════════════════════════════════════════ -->
+<section id="phase4View" class="no-print hidden flex-1 flex flex-col max-w-[1720px] w-full mx-auto px-3 py-2 gap-2 lg:h-[calc(100vh-50px)] lg:overflow-hidden">
+
+  <!-- COMPACT PHYSICAL PARAMETERS & LIVE FORCE TELEMETRY BAR -->
+  <div class="bg-white border border-slate-200 rounded-xl px-3 py-1.5 shadow-sm shrink-0">
+    <div class="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+      <!-- Fixed Assumed Specs -->
+      <div class="flex flex-wrap items-center gap-3">
+        <div>
+          <span class="text-slate-500">m:</span>
+          <strong class="mono text-[#0f2942] ml-0.5">1.50 kg</strong>
+        </div>
+        <div class="border-l border-slate-200 pl-3">
+          <span class="text-slate-500">W:</span>
+          <strong class="mono text-[#b91c1c] ml-0.5">14.72 N</strong>
+        </div>
+        <div class="border-l border-slate-200 pl-3">
+          <span class="text-slate-500">T_max:</span>
+          <strong class="mono text-[#0f2942] ml-0.5">30.00 N</strong>
+        </div>
+        <div class="border-l border-slate-200 pl-3">
+          <span class="text-slate-500">Feedforward:</span>
+          <strong id="hudFeedforwardBadge" class="mono text-[#1d4ed8] ml-0.5">ON (14.72 N)</strong>
+        </div>
+      </div>
+
+      <!-- Live Force & Thrust Bar Gauge -->
+      <div class="flex flex-wrap items-center gap-3">
+        <div class="flex items-center gap-2">
+          <span class="text-slate-500 font-medium">Thrust (T):</span>
+          <span id="barThrustVal" class="mono font-bold text-[#1d4ed8] w-14 text-right">0.00 N</span>
+          <div class="relative w-28 h-2.5 bg-slate-100 border border-slate-300 rounded-full overflow-hidden">
+            <div id="barThrustFill" class="h-full bg-[#1d4ed8] transition-all duration-75" style="width: 0%"></div>
+            <!-- Hover Weight Marker at 14.72 / 30.00 = 49.05% -->
+            <div class="absolute top-0 bottom-0 w-0.5 bg-[#b91c1c]" style="left: 49.05%" title="Hover Weight = 14.72 N"></div>
+          </div>
+        </div>
+        <div class="border-l border-slate-200 pl-3">
+          <span class="text-slate-500">F_net:</span>
+          <strong id="barNetForce" class="mono text-[#0f2942] ml-0.5 w-14 inline-block text-right">0.00 N</strong>
+        </div>
+        <div class="border-l border-slate-200 pl-3">
+          <span class="text-slate-500">a_z:</span>
+          <strong id="barAccel" class="mono text-[#0f2942] ml-0.5 w-18 inline-block text-right">0.00 m/s&sup2;</strong>
+        </div>
+        <div class="border-l border-slate-200 pl-3">
+          <span class="text-slate-500">Wind:</span>
+          <strong id="barWindForce" class="mono text-slate-600 ml-0.5 w-14 inline-block text-right">0.00 N</strong>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN SIMULATOR GRID (ALL 3 VIEWS VISIBLE AT ONCE ON ONE SCREEN) -->
+  <div class="flex-1 min-h-0 grid lg:grid-cols-12 gap-2.5">
+
+    <!-- LEFT CONTROL PANEL: SLIDERS + CONTROLS + LIVE LAW (4 Cols, Fits Without Scrolling) -->
+    <div class="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex flex-col justify-between gap-2 min-h-0 overflow-y-auto">
+
+      <!-- 1. Milestone Selector Tabs + Compact Description -->
+      <div class="space-y-1.5">
+        <div class="flex items-center justify-between">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Flight Milestones</span>
+          <span id="milestonePassRuleBadge" class="mono text-[10px] font-bold text-[#1d4ed8]">Pass Cutoff: &ge; 85 / 100</span>
+        </div>
+        <div id="milestoneTabs" class="grid grid-cols-4 gap-1"></div>
+        <div id="milestoneDescBox" class="px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200">
+          <div id="msTitle" class="text-[11px] font-bold text-[#0f2942] leading-tight">Milestone 1</div>
+          <p id="msDesc" class="text-[10px] text-slate-600 mt-0.5 leading-snug"></p>
+        </div>
+      </div>
+
+      <!-- 2. PID Gain Sliders (Start strictly at 0.00) -->
+      <div class="space-y-1.5 border-t border-slate-200 pt-2">
+        <div class="flex items-center justify-between">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-[#0f2942]">PID Controller Gains (Live Tunable)</span>
+          <button onclick="zeroPidGains()" class="text-[10px] font-semibold text-slate-500 hover:text-[#1d4ed8] underline">Reset 0.00</button>
+        </div>
+
+        <!-- Kp -->
+        <div>
+          <div class="flex items-center justify-between text-[11px] mb-0.5">
+            <label for="slKp" class="font-semibold text-[#0f2942]">K_p <span class="font-normal text-slate-500">(Proportional, N/m)</span></label>
+            <input type="number" id="numKp" min="0" max="15" step="0.05" value="0.00"
+              class="w-16 px-1.5 py-0.5 text-right mono text-[11px] font-bold text-[#1d4ed8] bg-slate-50 border border-slate-300 rounded">
+          </div>
+          <input type="range" id="slKp" min="0" max="15" step="0.05" value="0" class="w-full block">
+        </div>
+
+        <!-- Ki -->
+        <div>
+          <div class="flex items-center justify-between text-[11px] mb-0.5">
+            <label for="slKi" class="font-semibold text-[#0f2942]">K_i <span class="font-normal text-slate-500">(Integral, N/(m&middot;s))</span></label>
+            <input type="number" id="numKi" min="0" max="5" step="0.05" value="0.00"
+              class="w-16 px-1.5 py-0.5 text-right mono text-[11px] font-bold text-[#1d4ed8] bg-slate-50 border border-slate-300 rounded">
+          </div>
+          <input type="range" id="slKi" min="0" max="5" step="0.05" value="0" class="w-full block">
+        </div>
+
+        <!-- Kd -->
+        <div>
+          <div class="flex items-center justify-between text-[11px] mb-0.5">
+            <label for="slKd" class="font-semibold text-[#0f2942]">K_d <span class="font-normal text-slate-500">(Derivative, N&middot;s/m)</span></label>
+            <input type="number" id="numKd" min="0" max="15" step="0.05" value="0.00"
+              class="w-16 px-1.5 py-0.5 text-right mono text-[11px] font-bold text-[#1d4ed8] bg-slate-50 border border-slate-300 rounded">
+          </div>
+          <input type="range" id="slKd" min="0" max="15" step="0.05" value="0" class="w-full block">
+        </div>
+
+        <!-- Analytical Stability Diagnostics -->
+        <div class="grid grid-cols-2 gap-1.5 pt-0.5 text-[10px] mono">
+          <div class="bg-slate-50 border border-slate-200 rounded-md px-2 py-1 flex justify-between">
+            <span class="text-slate-500">&zeta; (Damping):</span>
+            <strong id="diagZeta" class="text-[#0f2942]">0.00</strong>
+          </div>
+          <div class="bg-slate-50 border border-slate-200 rounded-md px-2 py-1 flex justify-between">
+            <span class="text-slate-500">RH Max Ki:</span>
+            <strong id="diagRH" class="text-[#0f2942]">0.00</strong>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Launch, Speed & Options -->
+      <div class="space-y-1.5 border-t border-slate-200 pt-2">
+        <div class="flex items-center gap-1.5">
+          <button id="btnStartPause" onclick="toggleStartPause()"
+            class="flex-1 py-2 px-3 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white font-semibold text-xs transition">
+            Launch Drone
+          </button>
+          <button onclick="resetSimulation()"
+            class="py-2 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#0f2942] border border-slate-300 font-semibold text-xs transition">
+            Reset
+          </button>
+          <button id="btnShowLastCoach" onclick="toggleCoachOverlay(true)"
+            class="hidden py-2 px-2.5 rounded-lg bg-[#eff6ff] hover:bg-blue-100 text-[#1d4ed8] border border-blue-200 font-semibold text-[11px] transition">
+            Score
+          </button>
+        </div>
+
+        <div id="zeroGainNudge" class="hidden px-2.5 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-[10px] text-[#0f2942] leading-snug">
+          <strong>Zero Gains:</strong> Set K_p, K_i, K_d using <span class="mono">K_p = m&omega;_n&sup2;</span> and <span class="mono">K_d = 2&zeta;&radic;(mK_p)</span> before launch.
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+          <div class="flex items-center gap-0.5 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+            <span class="text-[10px] font-semibold text-slate-500 px-1.5">Speed</span>
+            <button onclick="setSimSpeed(1)" id="spd1" class="px-2 py-0.5 rounded text-[10px] font-bold bg-[#0f2942] text-white">1x</button>
+            <button onclick="setSimSpeed(2)" id="spd2" class="px-2 py-0.5 rounded text-[10px] font-semibold text-slate-600 hover:text-[#0f2942]">2x</button>
+            <button onclick="setSimSpeed(4)" id="spd4" class="px-2 py-0.5 rounded text-[10px] font-semibold text-slate-600 hover:text-[#0f2942]">4x</button>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="px-1.5 py-0.5 rounded bg-red-50 border border-red-200 text-[10px] font-bold text-[#b91c1c] mono">
+              Wind: ON
+            </span>
+            <label class="flex items-center gap-1 cursor-pointer text-[10px] font-semibold text-slate-700">
+              <input type="checkbox" id="chkGhost" onchange="onGhostToggleChange()" class="accent-[#1d4ed8] rounded">
+              Ghost
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. Compact Live PID Control Law Monitor -->
+      <div class="border-t border-slate-200 pt-2">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Live Control Law</span>
+          <span id="liveOutBadge" class="mono text-[10px] font-bold text-[#1d4ed8]">T = 0.00 N</span>
+        </div>
+        <div class="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 mono text-[10px] text-slate-700 space-y-0.5">
+          <div class="code-line">e = z_set &minus; z <span id="codeErrVal" class="text-[#1d4ed8] float-right">0.00 m</span></div>
+          <div id="codeLineP" class="code-line">P = Kp &times; e <span id="codePVal" class="text-[#0f2942] float-right">0.00 N</span></div>
+          <div id="codeLineI" class="code-line">I = Ki &times; &int;e dt <span id="codeIVal" class="text-[#0f2942] float-right">0.00 N</span></div>
+          <div id="codeLineD" class="code-line">D = &minus;Kd &times; v_z <span id="codeDVal" class="text-[#0f2942] float-right">0.00 N</span></div>
+          <div class="code-line border-t border-slate-200 mt-0.5 pt-0.5 font-semibold text-[#0f2942]">
+            T = clamp(T_ff + P + I + D, 0, 30)
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT VISUALIZATION STACK: DRONE ARENA (TOP) + REAL-TIME GRAPH (BOTTOM) -->
+    <div class="lg:col-span-8 flex flex-col gap-2 min-h-[500px] lg:min-h-0">
+
+      <!-- Flight Arena Canvas (62% of right column height) -->
+      <div class="relative flex-[62] min-h-0 bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+        <canvas id="droneCanvas" class="block w-full h-full"></canvas>
+
+        <!-- Stage Progress Pills (Top-Left) -->
+        <div id="stagePillsBar" class="absolute top-2.5 left-14 flex flex-wrap items-center gap-1 pointer-events-none"></div>
+
+        <!-- Animated Hold Timer Banner Pill (Top-Center) -->
+        <div id="holdTimerPill" class="hidden absolute top-2.5 left-1/2 -translate-x-1/2 bg-white/95 border border-slate-300 rounded-full px-3 py-1 shadow-sm flex items-center gap-2 pointer-events-none">
+          <svg id="holdStopwatchIcon" class="w-4 h-4 text-[#1d4ed8] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="13" r="8"></circle>
+            <path d="M12 9v4l2.5 1.5"></path>
+            <path d="M9 2h6"></path>
+            <path d="M12 2v3"></path>
+          </svg>
+          <span id="holdPillText" class="mono text-[11px] font-bold text-[#0f2942]">HOLD 0.0 / 5.0 s</span>
+          <div class="w-16 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+            <div id="holdPillBar" class="h-full bg-[#15803d] transition-all duration-75" style="width:0%"></div>
+          </div>
+        </div>
+
+        <!-- Compact Telemetry Overlay (Top-Right) -->
+        <div class="absolute top-2.5 right-2.5 bg-white/95 border border-slate-200 rounded-lg px-2.5 py-1.5 text-[10px] mono shadow-sm pointer-events-none space-y-0.5 min-w-[140px]">
+          <div class="flex justify-between gap-2"><span class="text-slate-500">ALT</span><strong id="hudAlt" class="text-[#0f2942]">0.00 m</strong></div>
+          <div class="flex justify-between gap-2"><span class="text-slate-500">VEL</span><strong id="hudVel" class="text-[#0f2942]">0.00 m/s</strong></div>
+          <div class="flex justify-between gap-2"><span class="text-slate-500">SET</span><strong id="hudSet" class="text-[#1d4ed8]">50.0 m</strong></div>
+          <div class="flex justify-between gap-2"><span class="text-slate-500">ERR</span><strong id="hudErr" class="text-[#0f2942]">+50.00 m</strong></div>
+          <div class="flex justify-between gap-2"><span class="text-slate-500">HOLD</span><strong id="hudHold" class="text-[#15803d]">0.0 / 5.0 s</strong></div>
+          <div class="flex justify-between gap-2"><span class="text-slate-500">GEAR</span><strong id="hudGear" class="text-slate-600">RETRACTED</strong></div>
+          <div class="flex justify-between gap-2"><span class="text-slate-500">TIME</span><strong id="hudTime" class="text-slate-600">0.0 s</strong></div>
+        </div>
+
+        <!-- Ready / Crash Center Banner -->
+        <div id="canvasOverlayBox" class="hidden absolute inset-0 flex items-center justify-center bg-slate-900/10 pointer-events-none p-4">
+          <div id="canvasOverlayCard" class="bg-white border-2 border-[#0f2942] rounded-xl px-5 py-3.5 text-center shadow-lg max-w-md">
+            <div id="overlayTitle" class="text-sm font-bold text-[#0f2942]">Ready for Launch</div>
+            <div id="overlaySub" class="text-xs text-slate-600 mt-1">Tune your PID gains and click Launch Drone.</div>
+          </div>
+        </div>
+
+        <!-- Post-Flight 100-Point Diagnostic Coach Overlay (Keeps Sliders & Graph Unscrolled) -->
+        <div id="scoreCoachPanel" class="hidden absolute inset-0 flex items-center justify-center bg-slate-900/25 backdrop-blur-[1px] p-3 z-20">
+          <div class="bg-white border-2 border-[#0f2942] rounded-xl p-4 shadow-xl w-full max-w-md space-y-2.5">
+            <div class="flex items-center justify-between border-b border-slate-200 pb-2">
+              <div>
+                <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Trial Evaluation</div>
+                <div id="coachResultBadge" class="text-xs font-bold text-[#0f2942]">—</div>
+              </div>
+              <div class="flex items-center gap-3">
+                <div id="coachScoreBig" class="text-2xl font-bold mono text-[#0f2942]">0 / 100</div>
+                <button onclick="toggleCoachOverlay(false)" title="Inspect Flight Graph" class="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-bold">
+                  Hide
+                </button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-4 gap-1.5 text-[10px] mono text-center">
+              <div class="bg-slate-50 border border-slate-200 rounded px-1.5 py-1">
+                <div class="text-slate-500">Overshoot</div><strong id="scOvershoot">0/25</strong>
+              </div>
+              <div class="bg-slate-50 border border-slate-200 rounded px-1.5 py-1">
+                <div class="text-slate-500">Settling</div><strong id="scSettling">0/25</strong>
+              </div>
+              <div class="bg-slate-50 border border-slate-200 rounded px-1.5 py-1">
+                <div class="text-slate-500">Steady-Err</div><strong id="scSSE">0/25</strong>
+              </div>
+              <div class="bg-slate-50 border border-slate-200 rounded px-1.5 py-1">
+                <div class="text-slate-500">Touchdown</div><strong id="scLanding">0/25</strong>
+              </div>
+            </div>
+
+            <div id="coachTipsBox" class="text-[11px] text-slate-700 space-y-1 leading-snug max-h-28 overflow-y-auto bg-slate-50 border border-slate-200 rounded-lg p-2.5"></div>
+
+            <div id="coachActionRow" class="pt-0.5 flex gap-2"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dual Real-Time Telemetry Graph (38% of right column height) -->
+      <div class="relative flex-[38] min-h-0 bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+        <canvas id="graphCanvas" class="block w-full h-full"></canvas>
+        <div class="absolute top-1.5 right-2.5 flex flex-wrap items-center gap-2.5 text-[10px] font-semibold bg-white/90 px-2 py-0.5 rounded border border-slate-200 pointer-events-none">
+          <span class="flex items-center gap-1 text-[#1d4ed8]"><span class="w-3 h-0.5 bg-[#1d4ed8] inline-block"></span>Altitude (m)</span>
+          <span class="flex items-center gap-1 text-[#b91c1c]"><span class="w-3 h-0.5 border-t-2 border-dashed border-[#b91c1c] inline-block"></span>Setpoint (m)</span>
+          <span class="flex items-center gap-1 text-[#0f2942]"><span class="w-3 h-0.5 bg-[#0f2942] inline-block"></span>Thrust T (N)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     PHASE 5: POST-SIMULATION 6-QUESTION CERTIFICATION QUIZ
+     ════════════════════════════════════════════════════════════════════════ -->
+<section id="phase5View" class="no-print hidden flex-1 max-w-5xl w-full mx-auto p-4 sm:p-6 space-y-6">
+  <div id="quizSectionAnchor" class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-5">
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
+      <div>
+        <span class="text-xs font-bold uppercase tracking-wider text-[#1d4ed8]">Phase 4 &bull; Post-Simulation Assessment</span>
+        <h3 class="text-xl font-bold text-[#0f2942] mt-0.5">6-Question Control Engineering Certification Quiz</h3>
+        <p class="text-xs text-slate-600 mt-0.5">Now that you have tuned and flown all 4 autonomous milestones under wind gusts, score <strong>6 / 6 (100%)</strong> to unlock your Lab Report and C++ Firmware Export.</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <div class="px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+          <span class="text-slate-500">Attempts:</span>
+          <span id="quizAttemptBadge" class="mono font-bold text-[#0f2942] ml-1">0</span>
+        </div>
+        <div class="px-3.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs">
+          <span class="text-slate-500">Best Score:</span>
+          <span id="quizScoreBadge" class="mono font-bold text-[#1d4ed8] ml-1">0 / 6</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="quizLockedBySim" class="p-5 rounded-xl bg-slate-50 border border-slate-200 text-center space-y-2">
+      <div class="text-sm font-bold text-[#0f2942]">Complete All 4 Flight Milestones to Unlock the Certification Quiz</div>
+      <p class="text-xs text-slate-600">Pass Milestones 1&ndash;3 (&ge; 85/100) and Milestone 4 (&ge; 80/100) in the Flight Simulator first.</p>
+      <button onclick="navigatePhase(4)" class="mt-2 px-4 py-2 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white text-xs font-semibold transition">
+        &larr; Return to Flight Simulator
+      </button>
+    </div>
+
+    <div id="quizQuestionsContainer" class="hidden space-y-4"></div>
+
+    <div id="quizActionBar" class="hidden pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-4">
+      <div id="quizStatusMessage" class="text-xs font-medium text-slate-600">
+        Select one answer for each of the 6 questions and submit.
+      </div>
+      <div class="flex items-center gap-3">
+        <button id="btnSubmitQuiz" onclick="submitQuizAttempt()"
+          class="px-5 py-2.5 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white font-semibold text-xs transition">
+          Submit Quiz Answers
+        </button>
+        <button id="btnUnlockReport" onclick="navigatePhase(6)" disabled
+          class="px-5 py-2.5 rounded-lg bg-[#15803d] hover:bg-[#0f2942] text-white font-semibold text-xs disabled:opacity-40 disabled:cursor-not-allowed transition">
+          Proceed to Report &amp; C++ Export &rarr;
+        </button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     PHASE 6: OFFICIAL LAB REPORT & C++ ARDUINO CODE EXPORT
+     ════════════════════════════════════════════════════════════════════════ -->
+<section id="phase6View" class="hidden flex-1 max-w-5xl w-full mx-auto p-4 sm:p-8 space-y-6">
+  <!-- Action Bar -->
+  <div class="no-print flex flex-wrap items-center justify-between gap-4 bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+    <div>
+      <h2 class="text-lg font-bold text-[#0f2942]">Control Engineering Lab Report &amp; C++ Firmware Export</h2>
+      <p class="text-xs text-slate-600">Verified upon passing Milestone 4 (&ge; 80 / 100) and the 6-question Certification Quiz (6 / 6).</p>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <button onclick="downloadStandaloneReport()" class="px-4 py-2 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white font-semibold text-xs transition">
+        Download Report (.HTML)
+      </button>
+      <button onclick="window.print()" class="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#0f2942] border border-slate-300 font-semibold text-xs transition">
+        Print / Save PDF
+      </button>
+      <button onclick="navigatePhase(4)" class="px-3.5 py-2 rounded-lg bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-semibold text-xs transition">
+        &larr; Back to Simulator
+      </button>
+    </div>
+  </div>
+
+  <!-- Printable Formal Report -->
+  <div id="printableReportArea" class="bg-white border border-slate-300 rounded-2xl p-6 sm:p-10 shadow-sm space-y-6">
+    <div class="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 pb-5">
+      <div>
+        <div class="text-lg font-bold tracking-[0.14em] uppercase text-[#0f2942]">CHANAKYA UNIVERSITY</div>
+        <div class="text-xs font-bold text-[#1d4ed8] uppercase tracking-wider mt-0.5">
+          Course: Control Engineering &bull; PID Drone Flight Laboratory Report
+        </div>
+        <div class="text-xs text-slate-600 mt-1">
+          Designed and Developed by: <strong class="text-[#0f2942]">Prof. Shreehari H S</strong>
+        </div>
+      </div>
+      <div class="bg-slate-50 border border-slate-200 rounded-xl px-5 py-3 text-right">
+        <div class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Overall Average</div>
+        <div id="rptOverallGrade" class="text-2xl font-bold mono text-[#0f2942]">0 / 100</div>
+      </div>
+    </div>
+
+    <div class="grid sm:grid-cols-5 gap-4 bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs">
+      <div><span class="text-slate-500 block">Student Name</span><strong id="rptName" class="text-[#0f2942] text-sm">&mdash;</strong></div>
+      <div><span class="text-slate-500 block">Roll Number</span><strong id="rptRoll" class="text-[#1d4ed8] text-sm mono">&mdash;</strong></div>
+      <div><span class="text-slate-500 block">Registered Email</span><strong id="rptEmail" class="text-slate-700 text-xs break-all">&mdash;</strong></div>
+      <div><span class="text-slate-500 block">Certification Quiz</span><strong id="rptQuizScore" class="text-[#15803d] text-sm mono">0 / 6</strong></div>
+      <div><span class="text-slate-500 block">Generated On</span><strong id="rptTimestamp" class="text-slate-700 text-xs">&mdash;</strong></div>
+    </div>
+
+    <div>
+      <h3 class="text-xs font-bold uppercase tracking-wider text-[#0f2942] mb-2">
+        Milestone Performance Summary (m = 1.50 kg, W = 14.72 N | Cutoffs: M1&ndash;M3 &ge; 85, M4 &ge; 80)
+      </h3>
+      <div class="overflow-x-auto border border-slate-200 rounded-xl">
+        <table class="w-full text-left border-collapse text-xs">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase text-[10px]">
+              <th class="py-2.5 px-3">Milestone</th>
+              <th class="py-2.5 px-3">Cutoff</th>
+              <th class="py-2.5 px-3">Status</th>
+              <th class="py-2.5 px-3">Best Score</th>
+              <th class="py-2.5 px-3">Best PID Gains (Kp, Ki, Kd)</th>
+              <th class="py-2.5 px-3">Trials</th>
+            </tr>
+          </thead>
+          <tbody id="rptMilestonesTableBody" class="divide-y divide-slate-200 mono"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- C++ / Arduino Code Exporter -->
+  <div class="no-print bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+    <div class="flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <div class="text-xs font-bold uppercase tracking-wider text-[#1d4ed8]">Microcontroller Outer-Loop Deployment</div>
+        <h3 class="text-lg font-bold text-[#0f2942] mt-0.5">C++ / Arduino Autonomous Altitude PID Template</h3>
+        <p class="text-xs text-slate-600 mt-0.5">Populated with your verified Milestone 4 gains and safety-clamped vertical thrust law.</p>
+      </div>
+      <div id="cppExportActions" class="hidden flex items-center gap-2">
+        <button onclick="copyCppCode()" id="btnCopyCpp" class="px-4 py-2 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white font-semibold text-xs transition">
+          Copy C++ Code
+        </button>
+        <button onclick="downloadCppCode()" class="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#0f2942] border border-slate-300 font-semibold text-xs transition">
+          Download .ino File
+        </button>
+      </div>
+    </div>
+
+    <div id="cppLockedNotice" class="p-5 rounded-xl bg-slate-50 border border-slate-200 text-center space-y-1.5">
+      <div class="text-sm font-bold text-[#0f2942]">Pass Milestone 4 (&ge; 80 / 100) &amp; Certification Quiz (6 / 6) to Unlock C++ Code Export</div>
+      <p class="text-xs text-slate-600">Complete the full autonomous descent (20m &rarr; 0m) and pass the post-simulation quiz to generate your hardware-ready firmware.</p>
+    </div>
+
+    <div id="cppCodeWrapper" class="hidden">
+      <pre id="cppCodePreview" class="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs mono text-[#0f2942] overflow-x-auto max-h-[420px] leading-relaxed"></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     FACULTY PORTAL (ANALYTICS DASHBOARD + AUTHORIZED ROSTER MANAGER)
+     ════════════════════════════════════════════════════════════════════════ -->
+<section id="facultyView" class="no-print hidden flex-1 max-w-[1650px] w-full mx-auto p-4 sm:p-6 space-y-5">
+  <!-- Faculty Header -->
+  <div class="bg-[#0f2942] text-white rounded-2xl p-5 sm:p-6 flex flex-wrap items-center justify-between gap-4 shadow-sm">
+    <div>
+      <div class="text-xs font-bold uppercase tracking-[0.16em] text-slate-300">
+        CHANAKYA UNIVERSITY &bull; Course: Control Engineering
+      </div>
+      <h2 class="text-2xl font-bold text-white mt-1">Faculty Analytics &amp; Authorized Roster Portal</h2>
+      <p class="text-xs text-slate-300 mt-0.5">
+        Instructor: <strong class="text-white">Prof. Shreehari H S</strong> &bull; Pass Cutoffs: M1&ndash;M3 &ge; 85/100, M4 &ge; 80/100
+      </p>
+    </div>
+    <div class="flex flex-wrap items-center gap-2.5">
+      <button onclick="exportClassCSV()" class="px-4 py-2 rounded-lg bg-[#1d4ed8] hover:bg-blue-600 text-white font-semibold text-xs transition">
+        Export Class CSV
+      </button>
+      <button onclick="exitFacultyPortal()" class="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white font-semibold text-xs border border-white/20 transition">
+        Exit Faculty Portal
+      </button>
+    </div>
+  </div>
+
+  <!-- Faculty Portal Tabs -->
+  <div class="flex items-center gap-2 border-b border-slate-200 pb-2">
+    <button id="facTabAnalytics" onclick="switchFacultyTab('analytics')"
+      class="px-4 py-2 rounded-lg text-xs font-bold bg-[#0f2942] text-white transition">
+      Student Analytics Dashboard
+    </button>
+    <button id="facTabRoster" onclick="switchFacultyTab('roster')"
+      class="px-4 py-2 rounded-lg text-xs font-bold bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 transition">
+      Authorized Roster Manager
+    </button>
+  </div>
+
+  <!-- TAB A: STUDENT ANALYTICS DASHBOARD -->
+  <div id="facultyAnalyticsTab" class="space-y-5">
+    <!-- KPI Cards -->
+    <div class="grid grid-cols-2 lg:grid-cols-5 gap-4">
+      <div class="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+        <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Authorized Roster</div>
+        <div id="kpiAuthorized" class="text-2xl font-bold mono text-[#0f2942] mt-1">0</div>
+      </div>
+      <div class="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+        <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Active Students</div>
+        <div id="kpiActive" class="text-2xl font-bold mono text-[#1d4ed8] mt-1">0</div>
+      </div>
+      <div class="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+        <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Quiz Passed (6/6)</div>
+        <div id="kpiQuizPassed" class="text-2xl font-bold mono text-[#0f2942] mt-1">0</div>
+      </div>
+      <div class="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+        <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">M4 Completed (&ge;80)</div>
+        <div id="kpiM4Done" class="text-2xl font-bold mono text-[#15803d] mt-1">0</div>
+      </div>
+      <div class="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+        <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Class Avg Score</div>
+        <div id="kpiAvgScore" class="text-2xl font-bold mono text-[#0f2942] mt-1">0.0</div>
+      </div>
+    </div>
+
+    <!-- Search & Filter -->
+    <div class="bg-white border border-slate-200 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-sm">
+      <div class="flex flex-wrap items-center gap-3 flex-1">
+        <input type="text" id="facultySearchInput" oninput="renderFacultyAnalyticsTable()" placeholder="Search by Roll Number or Name..."
+          class="w-full sm:w-80 px-3.5 py-2 rounded-lg bg-slate-50 border border-slate-300 text-xs text-[#0f2942] focus:outline-none focus:bg-white focus:border-[#1d4ed8]">
+        <select id="facultyStatusFilter" onchange="renderFacultyAnalyticsTable()"
+          class="px-3.5 py-2 rounded-lg bg-slate-50 border border-slate-300 text-xs text-[#0f2942] focus:outline-none focus:border-[#1d4ed8]">
+          <option value="ALL">All Students</option>
+          <option value="COMPLETED">Fully Certified (M4 + Quiz)</option>
+          <option value="QUIZ_PENDING">M4 Passed — Quiz Pending</option>
+          <option value="IN_FLIGHT">In Flight Milestones</option>
+        </select>
+      </div>
+      <div class="text-xs text-slate-500">Click any row to inspect individual student analytics &amp; trial logs</div>
+    </div>
+
+    <!-- Analytics Table -->
+    <div class="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+      <div class="overflow-x-auto">
+        <table class="w-full text-left border-collapse text-xs">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase text-[10px] tracking-wider">
+              <th class="py-3 px-4">Roll No</th>
+              <th class="py-3 px-4">Student Name &amp; Email</th>
+              <th class="py-3 px-3 text-center">M1 (&ge;85)</th>
+              <th class="py-3 px-3 text-center">M2 (&ge;85)</th>
+              <th class="py-3 px-3 text-center">M3 (&ge;85)</th>
+              <th class="py-3 px-3 text-center">M4 (&ge;80)</th>
+              <th class="py-3 px-3 text-center">Quiz (Att.)</th>
+              <th class="py-3 px-3 text-center">Trials</th>
+              <th class="py-3 px-4">Best Gains (Kp / Ki / Kd)</th>
+              <th class="py-3 px-3">Status</th>
+              <th class="py-3 px-4 text-right">Last Active</th>
+            </tr>
+          </thead>
+          <tbody id="facultyTableBody" class="divide-y divide-slate-200">
+            <tr><td colspan="11" class="py-8 text-center text-slate-500">No student activity recorded yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB B: AUTHORIZED ROSTER MANAGER -->
+  <div id="facultyRosterTab" class="hidden grid lg:grid-cols-12 gap-5">
+    <!-- Add Single & Bulk Import -->
+    <div class="lg:col-span-5 space-y-5">
+      <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-3">
+        <h3 class="text-sm font-bold text-[#0f2942] border-b border-slate-200 pb-2">Add Authorized Student</h3>
+        <form onsubmit="addSingleRosterStudent(event)" class="space-y-3">
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-600 uppercase mb-1">Roll Number</label>
+            <input type="text" id="rosterAddRoll" required placeholder="Enter roll number"
+              class="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-300 text-xs mono uppercase text-[#0f2942] focus:outline-none focus:bg-white focus:border-[#1d4ed8]">
+          </div>
+          <div>
+            <label class="block text-[11px] font-semibold text-slate-600 uppercase mb-1">Registered Email ID</label>
+            <input type="email" id="rosterAddEmail" required placeholder="student@chanakyauniversity.edu.in"
+              class="w-full px-3 py-2 rounded-lg bg-slate-50 border border-slate-300 text-xs text-[#0f2942] focus:outline-none focus:bg-white focus:border-[#1d4ed8]">
+          </div>
+          <button type="submit" class="w-full py-2.5 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white font-semibold text-xs transition">
+            Add to Authorized Roster
+          </button>
+        </form>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-3">
+        <h3 class="text-sm font-bold text-[#0f2942] border-b border-slate-200 pb-2">Bulk Import Roster (CSV)</h3>
+        <p class="text-xs text-slate-600">Paste one student per line in the format <span class="mono font-semibold">RollNumber, Registered Email ID</span>:</p>
+        <textarea id="rosterBulkTextarea" rows="5" placeholder="ROLL001, student1@chanakyauniversity.edu.in&#10;ROLL002, student2@chanakyauniversity.edu.in"
+          class="w-full p-3 rounded-lg bg-slate-50 border border-slate-300 text-xs mono text-[#0f2942] focus:outline-none focus:bg-white focus:border-[#1d4ed8]"></textarea>
+        <div id="rosterImportMsg" class="hidden text-xs font-medium p-2 rounded-lg"></div>
+        <button onclick="bulkImportRoster()" class="w-full py-2.5 rounded-lg bg-[#1d4ed8] hover:bg-[#0f2942] text-white font-semibold text-xs transition">
+          Import All Listed Students
+        </button>
+      </div>
+    </div>
+
+    <!-- Current Authorized Roster Table -->
+    <div class="lg:col-span-7 bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col">
+      <div class="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+        <h3 class="text-sm font-bold text-[#0f2942]">Official Authorized Class Roster</h3>
+        <span id="rosterCountBadge" class="mono text-xs font-bold text-[#1d4ed8]">0 Students</span>
+      </div>
+      <div class="overflow-y-auto max-h-[540px]">
+        <table class="w-full text-left border-collapse text-xs">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase text-[10px]">
+              <th class="py-2.5 px-4">Roll Number</th>
+              <th class="py-2.5 px-4">Registered Email ID</th>
+              <th class="py-2.5 px-4 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody id="rosterTableBody" class="divide-y divide-slate-200"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     MODALS: FACULTY PIN & INDIVIDUAL STUDENT DRILL-DOWN
+     ════════════════════════════════════════════════════════════════════════ -->
+<div id="facultyPinModal" class="no-print fixed inset-0 bg-slate-900/50 backdrop-blur-[2px] hidden items-center justify-center z-50 p-4">
+  <div class="bg-white border border-slate-200 rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-xl">
+    <div>
+      <div class="text-[11px] font-bold uppercase tracking-wider text-[#1d4ed8]">Chanakya University</div>
+      <h3 class="text-lg font-bold text-[#0f2942] mt-0.5">Faculty Portal Authentication</h3>
+      <p class="text-xs text-slate-600 mt-1">Enter instructor PIN to access student analytics and roster management.</p>
+    </div>
+    <form onsubmit="verifyFacultyPin(event)" class="space-y-3">
+      <input type="password" id="facultyPinInput" placeholder="Instructor PIN" autocomplete="off"
+        class="w-full px-3.5 py-2.5 rounded-lg bg-slate-50 border border-slate-300 text-center mono text-sm tracking-widest text-[#0f2942] focus:outline-none focus:bg-white focus:border-[#1d4ed8]">
+      <div id="facultyPinError" class="hidden text-center text-xs text-[#b91c1c] font-semibold">Incorrect PIN. Please try again.</div>
+      <div class="flex gap-2 pt-1">
+        <button type="submit" class="flex-1 py-2.5 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white font-semibold text-xs transition">
+          Unlock Portal
+        </button>
+        <button type="button" onclick="closeFacultyPinModal()" class="px-4 py-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs border border-slate-300 transition">
+          Cancel
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="studentDetailModal" class="no-print fixed inset-0 bg-slate-900/50 backdrop-blur-[2px] hidden items-center justify-center z-50 p-4">
+  <div class="bg-white border border-slate-200 rounded-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-xl">
+    <div class="p-5 bg-[#0f2942] text-white flex items-center justify-between gap-4">
+      <div>
+        <div class="flex items-center gap-2.5">
+          <span id="drillRoll" class="mono text-xs font-bold px-2 py-0.5 rounded bg-white/15 text-white">ROLL</span>
+          <h3 id="drillName" class="text-lg font-bold text-white">Student Name</h3>
+        </div>
+        <p id="drillMeta" class="text-xs text-slate-300 mt-1">Quiz &amp; Activity Summary</p>
+      </div>
+      <button onclick="closeStudentDrillModal()" class="px-3.5 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-semibold">
+        Close
+      </button>
+    </div>
+
+    <div class="p-5 overflow-y-auto space-y-5 flex-1">
+      <div class="bg-[#eff6ff] border border-blue-200 rounded-xl p-4">
+        <div class="text-[11px] font-bold uppercase tracking-wider text-[#1d4ed8] mb-1">Instructor Performance Summary</div>
+        <p id="drillSummaryText" class="text-xs text-slate-700 leading-relaxed"></p>
+      </div>
+
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <h4 class="text-xs font-bold uppercase tracking-wider text-[#0f2942]">Milestone Progress Bars</h4>
+          <span class="text-[11px] text-slate-500">Vertical marker = Pass Cutoff (85 for M1&ndash;M3, 80 for M4)</span>
+        </div>
+        <div id="drillMilestoneBars" class="space-y-3 bg-slate-50 border border-slate-200 rounded-xl p-4"></div>
+      </div>
+
+      <div>
+        <h4 class="text-xs font-bold uppercase tracking-wider text-[#0f2942] mb-2">Chronological Flight Trial Telemetry Log</h4>
+        <div class="overflow-x-auto border border-slate-200 rounded-xl">
+          <table class="w-full text-left border-collapse text-[11px] mono">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-slate-600 uppercase text-[10px]">
+                <th class="py-2 px-3">Time</th>
+                <th class="py-2 px-3">Milestone</th>
+                <th class="py-2 px-3">Score</th>
+                <th class="py-2 px-3">Result</th>
+                <th class="py-2 px-3">Kp / Ki / Kd</th>
+                <th class="py-2 px-3">Overshoot</th>
+                <th class="py-2 px-3">SSE</th>
+                <th class="py-2 px-3">Touchdown</th>
+              </tr>
+            </thead>
+            <tbody id="drillTrialsBody" class="divide-y divide-slate-200"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     APPLICATION MODULE (FIREBASE FIRESTORE + REALISTIC 1.50 KG PHYSICS ENGINE)
+     ════════════════════════════════════════════════════════════════════════ -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+import { getFirestore, doc, getDoc, getDocs, setDoc, deleteDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+// ── ENGINEERING CONSTANTS ──────────────────────────────────────────────────
+const FACULTY_PIN = "CU2026";
+const DRONE_MASS = 1.50;                     // kg
+const GRAVITY_G = 9.81;                      // m/s^2
+const DRONE_WEIGHT = DRONE_MASS * GRAVITY_G; // 14.715 N (~14.72 N)
+const MAX_THRUST = 30.00;                    // N
+const AIR_DRAG_C = 0.15;                     // N*s/m
+const WORLD_MAX_ALT = 62;                    // m
+const FIXED_DT = 1 / 60;                     // 60 Hz physics step
+const GRAPH_MAX_PTS = 1200;                  // 20 s rolling window
+
+const LS_ROSTER_KEY = "cu_pid_authorized_roster_v3";
+const LS_ANALYTICS_KEY = "cu_pid_student_analytics_v3";
+
+const SEED_ROSTER = [];
+
+// ── FIREBASE & STORAGE STATE ───────────────────────────────────────────────
+let db = null;
+let auth = null;
+let firebaseReady = false;
+let unsubAnalytics = null;
+let unsubRoster = null;
+const appId = typeof __app_id !== "undefined" ? __app_id : "chanakya-control-eng-pid";
+
+let authorizedRosterCache = loadLocalJSON(LS_ROSTER_KEY, SEED_ROSTER);
+let studentAnalyticsCache = loadLocalJSON(LS_ANALYTICS_KEY, []);
+
+function loadLocalJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return JSON.parse(JSON.stringify(fallback));
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : JSON.parse(JSON.stringify(fallback));
+  } catch {
+    return JSON.parse(JSON.stringify(fallback));
+  }
+}
+
+function saveLocalCaches() {
+  try {
+    localStorage.setItem(LS_ROSTER_KEY, JSON.stringify(authorizedRosterCache));
+    localStorage.setItem(LS_ANALYTICS_KEY, JSON.stringify(studentAnalyticsCache));
+  } catch (e) {
+    console.warn("LocalStorage save warning:", e);
+  }
+}
+
+function getRosterCol() {
+  return collection(db, "artifacts", appId, "public", "data", "authorized_roster");
+}
+function getRosterDoc(rollId) {
+  return doc(db, "artifacts", appId, "public", "data", "authorized_roster", rollId);
+}
+function getAnalyticsCol() {
+  return collection(db, "artifacts", appId, "public", "data", "student_analytics");
+}
+function getAnalyticsDoc(rollId) {
+  return doc(db, "artifacts", appId, "public", "data", "student_analytics", rollId);
+}
+
+function normalizeRollId(roll) {
+  return roll.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "_");
+}
+function normalizeEmail(email) {
+  return email.trim().toLowerCase();
+}
+function escapeHTML(str) {
+  return String(str).replace(/[&<>"']/g, m => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[m]));
+}
+
+function setSyncIndicators(text, online) {
+  const dotCls = online ? "w-2 h-2 rounded-full bg-[#15803d]" : "w-2 h-2 rounded-full bg-slate-400";
+  const lDot = document.getElementById("loginSyncDot");
+  const lTxt = document.getElementById("loginSyncText");
+  const hDot = document.getElementById("headerSyncDot");
+  const hTxt = document.getElementById("headerSyncText");
+  if (lDot) lDot.className = dotCls;
+  if (lTxt) lTxt.textContent = text;
+  if (hDot) hDot.className = dotCls;
+  if (hTxt) hTxt.textContent = text;
+}
+
+async function initCloudBackend() {
+  try {
+    if (typeof __firebase_config === "undefined" || !__firebase_config) {
+      setSyncIndicators("Local Browser Storage Mode", true);
+      return;
+    }
+    const firebaseConfig = typeof __firebase_config === "string"
+      ? JSON.parse(__firebase_config)
+      : __firebase_config;
+
+    const app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+
+    if (typeof __initial_auth_token !== "undefined" && __initial_auth_token) {
+      await signInWithCustomToken(auth, __initial_auth_token);
+    } else {
+      await signInAnonymously(auth);
+    }
+
+    firebaseReady = true;
+
+    const rosterSnap = await getDocs(getRosterCol());
+    if (!rosterSnap.empty) {
+      authorizedRosterCache = [];
+      rosterSnap.forEach(d => authorizedRosterCache.push(d.data()));
+    }
+    saveLocalCaches();
+    setSyncIndicators("Course Database Connected", true);
+  } catch (err) {
+    console.warn("Cloud init fallback to local storage:", err);
+    setSyncIndicators("Local Browser Storage Mode", true);
+  }
+}
+
+// ── 6-QUESTION CERTIFICATION QUIZ (Balanced Keys: D, A, C, B, A, D) ────────
+const QUIZ_QUESTIONS = [
+  {
+    q: "1. For our assumed drone mass of m = 1.50 kg (g = 9.81 m/s²), what steady vertical thrust T_total is required to hover motionless at 50 m in calm air?",
+    options: [
+      "A) 0.00 N because velocity and acceleration are both zero at hover",
+      "B) 9.81 N equal to the gravitational acceleration constant",
+      "C) 30.00 N equal to the maximum available rotor thrust",
+      "D) 14.72 N equal to the drone's gravitational weight W = m · g"
+    ],
+    correct: 3,
+    explanation: "Correct (D). By Newton's 2nd Law (m·a_z = T − mg), hovering (a_z = 0, v_z = 0) requires T_total = m·g = 1.50 × 9.81 = 14.72 N."
+  },
+  {
+    q: "2. Using the 2nd-order closed-loop characteristic equation s² + (Kd/m)s + (Kp/m) = s² + 2ζω_n·s + ω_n², what are Kp and Kd for m = 1.50 kg, natural frequency ω_n = 2.0 rad/s, and critical damping ζ = 1.0?",
+    options: [
+      "A) Kp = 6.00 N/m and Kd = 6.00 N·s/m",
+      "B) Kp = 3.00 N/m and Kd = 1.50 N·s/m",
+      "C) Kp = 1.50 N/m and Kd = 9.81 N·s/m",
+      "D) Kp = 14.72 N/m and Kd = 0.00 N·s/m"
+    ],
+    correct: 0,
+    explanation: "Correct (A). Kp = m·ω_n² = 1.50 × 2.0² = 6.00 N/m, and Kd = 2·ζ·ω_n·m = 2 × 1.0 × 2.0 × 1.50 = 6.00 N·s/m."
+  },
+  {
+    q: "3. When gravity feedforward is OFF (Milestone 2), a PD-only controller (Ki = 0) settles below 50.0 m. How does adding the Integral term (Ki) eliminate this steady-state droop?",
+    options: [
+      "A) It increases the drone's maximum thrust limit above 30.00 N",
+      "B) It multiplies vertical velocity to brake the drone faster",
+      "C) It integrates persistent altitude error over time until I_term builds up to 14.72 N, balancing gravity at zero error",
+      "D) It disables gravitational acceleration once the drone crosses 45 m"
+    ],
+    correct: 2,
+    explanation: "Correct (C). The Integral term accumulates error over time so that even when e(t) reaches 0 at 50.0 m, I_term holds the steady 14.72 N thrust needed to cancel weight."
+  },
+  {
+    q: "4. During a rapid climb from 0 m to 50 m, the drone shoots past 50 m to 59 m and oscillates repeatedly. Which adjustment directly increases damping ratio ζ to suppress overshoot?",
+    options: [
+      "A) Set Kd = 0.00 N·s/m and double Kp",
+      "B) Increase the Derivative gain Kd (since ζ = Kd / (2·√(m·Kp)))",
+      "C) Increase Ki above the Routh-Hurwitz limit Kp·Kd/m",
+      "D) Reduce the landing gear deployment altitude to 5 m"
+    ],
+    correct: 1,
+    explanation: "Correct (B). Increasing Kd directly raises damping ratio ζ, applying braking thrust proportional to −v_z before the drone overshoots the setpoint."
+  },
+  {
+    q: "5. Why is it impossible to fly a real 6-DOF quadcopter using ONLY a 1-DOF vertical lift PID controller?",
+    options: [
+      "A) Without a fast inner attitude loop (400–1000 Hz) holding Roll φ ≈ 0 and Pitch θ ≈ 0, slight imbalances tilt the thrust vector (T_z = T·cos φ·cos θ) and flip the drone in < 0.2 s",
+      "B) Because Newton's Second Law does not apply to vertical thrust outdoors",
+      "C) Because LiDAR sensors cannot measure altitude below 50 meters",
+      "D) Because real quadcopters do not use PID controllers for altitude"
+    ],
+    correct: 0,
+    explanation: "Correct (A). Real quadcopters require a cascaded architecture: a fast inner loop keeps Roll & Pitch near zero so the slower outer altitude PID can safely control vertical lift."
+  },
+  {
+    q: "6. According to the Routh-Hurwitz stability criterion for a 3rd-order PID-controlled mass (Ki < Kp·Kd/m), what happens if Ki is chosen excessively high?",
+    options: [
+      "A) The drone climbs infinitely fast with zero overshoot",
+      "B) The drone's physical weight drops below 14.72 N",
+      "C) The Derivative term automatically cancels the Integral term",
+      "D) Integral windup and phase lag destabilize the closed loop, producing growing oscillations and potential crash"
+    ],
+    correct: 3,
+    explanation: "Correct (D). Exceeding the Routh-Hurwitz limit Ki < Kp·Kd/m introduces excessive phase lag and integral windup, destabilizing the closed-loop system."
+  }
+];
+
+// ── 4 SEQUENTIAL MILESTONES (M1–M3 PASS >= 85, M4 PASS >= 80, COMPULSORY WIND) ──
+const MILESTONE_CONFIGS = [
+  {
+    id: 1,
+    shortTitle: "M1: Takeoff",
+    title: "Milestone 1: Takeoff & PD Critical Damping (0 m → 50 m)",
+    desc: "Ascend 0 m → 50 m and hold 5 s under compulsory ±2.5 N wind gusts. Gravity Feedforward (14.72 N) is ON.",
+    passCutoff: 85,
+    gravityFeedforward: true,
+    windForced: true,
+    stages: [
+      { setpoint: 50, hover: 5, label: "Ascend 0m → 50m & Hold 5s", deployGear: false }
+    ]
+  },
+  {
+    id: 2,
+    shortTitle: "M2: Gravity",
+    title: "Milestone 2: Uncompensated Gravity Hold (0 m → 50 m)",
+    desc: "Feedforward OFF (0 N) + compulsory ±2.5 N wind gusts. Tune Ki so I_term carries the full 14.72 N weight for 10 s.",
+    passCutoff: 85,
+    gravityFeedforward: false,
+    windForced: true,
+    stages: [
+      { setpoint: 50, hover: 10, label: "Ascend 0m → 50m & Hold 10s", deployGear: false }
+    ]
+  },
+  {
+    id: 3,
+    shortTitle: "M3: Descent",
+    title: "Milestone 3: Step-Down Descent, Gear Deploy & Wind",
+    desc: "0m → 50m (10s) → 40m (10s) → 30m (10s) → 20m (Auto Gear + 10s) under compulsory ±2.5 N vertical wind gusts.",
+    passCutoff: 85,
+    gravityFeedforward: false,
+    windForced: true,
+    stages: [
+      { setpoint: 50, hover: 10, label: "Hover 50m (10s)", deployGear: false },
+      { setpoint: 40, hover: 10, label: "Step-Down 40m (10s)", deployGear: false },
+      { setpoint: 30, hover: 10, label: "Step-Down 30m (10s)", deployGear: false },
+      { setpoint: 20, hover: 10, label: "Deploy Gear & Hold 20m (10s)", deployGear: true }
+    ]
+  },
+  {
+    id: 4,
+    shortTitle: "M4: Landing",
+    title: "Milestone 4: Full Mission & Direct 20m → 0m Touchdown",
+    desc: "50m → 40m → 30m → 20m [Gear+10s] → 0m direct descent & soft touchdown (≤ 0.6 m/s) in wind. Pass Cutoff: ≥ 80/100.",
+    passCutoff: 80,
+    gravityFeedforward: false,
+    windForced: true,
+    stages: [
+      { setpoint: 50, hover: 10, label: "Hover 50m (10s)", deployGear: false },
+      { setpoint: 40, hover: 10, label: "Hover 40m (10s)", deployGear: false },
+      { setpoint: 30, hover: 10, label: "Hover 30m (10s)", deployGear: false },
+      { setpoint: 20, hover: 10, label: "Gear Deploy & Hold 20m (10s)", deployGear: true },
+      { setpoint: 0,  hover: 0,  label: "Direct Descent 20m → 0m (≤0.6 m/s)", deployGear: true }
+    ]
+  }
+];
+
+// ── STUDENT SESSION RECORD ─────────────────────────────────────────────────
+let currentStudent = null;
+let currentPhase = 1;
+let activeMilestoneId = 1;
+
+function createEmptyStudentRecord(rollNo, email, name) {
+  return {
+    rollNo: rollNo.toUpperCase(),
+    email: email.trim().toLowerCase(),
+    name: name.trim(),
+    theoryRead: { m1: false, m2: false, m3: false },
+    quizPassed: false,
+    quizBestScore: 0,
+    quizAttempts: 0,
+    unlockedMilestone: 1,
+    milestones: {
+      1: { passed: false, bestScore: 0, bestGains: null, attempts: 0 },
+      2: { passed: false, bestScore: 0, bestGains: null, attempts: 0 },
+      3: { passed: false, bestScore: 0, bestGains: null, attempts: 0 },
+      4: { passed: false, bestScore: 0, bestGains: null, attempts: 0 }
+    },
+    trials: [],
+    lastActive: new Date().toISOString()
+  };
+}
+
+function isTheoryComplete(student) {
+  const tr = student?.theoryRead || {};
+  return !!(tr.m1 && tr.m2 && tr.m3);
+}
+
+async function persistCurrentStudent() {
+  if (!currentStudent) return;
+  currentStudent.lastActive = new Date().toISOString();
+  const rid = normalizeRollId(currentStudent.rollNo);
+
+  const idx = studentAnalyticsCache.findIndex(s => normalizeRollId(s.rollNo) === rid);
+  if (idx >= 0) studentAnalyticsCache[idx] = JSON.parse(JSON.stringify(currentStudent));
+  else studentAnalyticsCache.push(JSON.parse(JSON.stringify(currentStudent)));
+  saveLocalCaches();
+
+  if (firebaseReady && db) {
+    try {
+      await setDoc(getAnalyticsDoc(rid), currentStudent);
+    } catch (err) {
+      console.warn("Firestore student sync warning:", err);
+    }
+  }
+}
+
+// ── AUTHORIZED LOGIN & NAVIGATION ──────────────────────────────────────────
+window.handleStudentLogin = async function(e) {
+  e.preventDefault();
+  const rollInput = document.getElementById("inputStudentRoll").value.trim().toUpperCase();
+  const emailInput = document.getElementById("inputStudentEmail").value.trim();
+  const nameInput = document.getElementById("inputStudentName").value.trim();
+  const errEl = document.getElementById("loginErrorMsg");
+  errEl.classList.add("hidden");
+
+  if (firebaseReady && db) {
+    try {
+      const snap = await getDocs(getRosterCol());
+      if (!snap.empty) {
+        authorizedRosterCache = [];
+        snap.forEach(d => authorizedRosterCache.push(d.data()));
+        saveLocalCaches();
+      }
+    } catch (err) {
+      console.warn("Roster refresh fallback:", err);
+    }
+  }
+
+  // Validate ONLY Roll Number + Registered Email ID against authorized roster
+  const matched = authorizedRosterCache.find(
+    r => normalizeRollId(r.rollNo) === normalizeRollId(rollInput) &&
+         normalizeEmail(r.email || "") === normalizeEmail(emailInput)
+  );
+
+  if (!matched) {
+    errEl.textContent = "Access Denied: Roll Number and Registered Email ID do not match the official Control Engineering authorized roster. Contact Prof. Shreehari H S if you are not yet registered.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+
+  const rid = normalizeRollId(matched.rollNo);
+  let record = null;
+
+  if (firebaseReady && db) {
+    try {
+      const docSnap = await getDoc(getAnalyticsDoc(rid));
+      if (docSnap.exists()) record = docSnap.data();
+    } catch (err) {
+      console.warn("Student fetch fallback:", err);
+    }
+  }
+  if (!record) {
+    const localFound = studentAnalyticsCache.find(s => normalizeRollId(s.rollNo) === rid);
+    record = localFound ? JSON.parse(JSON.stringify(localFound)) : createEmptyStudentRecord(matched.rollNo, matched.email, nameInput);
+  }
+
+  // Store Name as additional info (not validated against roster)
+  record.email = matched.email.trim().toLowerCase();
+  if (nameInput) record.name = nameInput;
+
+  currentStudent = record;
+  await persistCurrentStudent();
+
+  document.getElementById("hdrStudentName").textContent = currentStudent.name || currentStudent.email;
+  document.getElementById("hdrStudentRoll").textContent = currentStudent.rollNo;
+  document.getElementById("mainHeader").classList.remove("hidden");
+
+  renderTheoryUI();
+  activeMilestoneId = Math.min(4, currentStudent.unlockedMilestone || 1);
+  navigatePhase(isTheoryComplete(currentStudent) ? 3 : 2);
+};
+
+window.logoutToLogin = function() {
+  stopSimulationLoop();
+  currentStudent = null;
+  document.getElementById("mainHeader").classList.add("hidden");
+  showOnlyView("phase1View");
+  currentPhase = 1;
+};
+
+function showOnlyView(viewId) {
+  ["phase1View", "phase2View", "phase3View", "phase4View", "phase5View", "phase6View", "facultyView"].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (id === viewId) el.classList.remove("hidden");
+    else el.classList.add("hidden");
+  });
+}
+
+window.navigatePhase = function(phaseNum) {
+  if (!currentStudent) return;
+  const theoryOk = isTheoryComplete(currentStudent);
+  const m4Passed = !!(currentStudent.milestones && currentStudent.milestones[4] && currentStudent.milestones[4].passed);
+
+  if ((phaseNum === 3 || phaseNum === 4) && !theoryOk) {
+    phaseNum = 2;
+  } else if (phaseNum === 5 && !m4Passed) {
+    phaseNum = theoryOk ? 4 : 2;
+  } else if (phaseNum === 6 && (!m4Passed || !currentStudent.quizPassed)) {
+    phaseNum = m4Passed ? 5 : (theoryOk ? 4 : 2);
+  }
+
+  currentPhase = phaseNum;
+  showOnlyView(`phase${phaseNum}View`);
+  updateNavButtons();
+
+  if (phaseNum === 2) {
+    renderTheoryUI();
+  } else if (phaseNum === 4) {
+    renderMilestoneTabs();
+    selectMilestone(activeMilestoneId);
+    startSimulationLoop();
+  } else {
+    stopSimulationLoop();
+  }
+
+  if (phaseNum === 5) {
+    renderQuizUI();
+  } else if (phaseNum === 6) {
+    renderLabReportAndCpp();
+  }
+  window.scrollTo({ top: 0, behavior: "smooth" });
+};
+
+function updateNavButtons() {
+  const theoryOk = isTheoryComplete(currentStudent);
+  const m4Passed = !!(currentStudent && currentStudent.milestones?.[4]?.passed);
+  const quizOk = !!(currentStudent && currentStudent.quizPassed);
+
+  [2, 3, 4, 5, 6].forEach(p => {
+    const btn = document.getElementById(`navBtn${p}`);
+    if (!btn) return;
+    const isActive = currentPhase === p;
+    let isDisabled = false;
+    if ((p === 3 || p === 4) && !theoryOk) isDisabled = true;
+    if (p === 5 && !m4Passed) isDisabled = true;
+    if (p === 6 && (!m4Passed || !quizOk)) isDisabled = true;
+
+    btn.disabled = isDisabled;
+    btn.className = isActive
+      ? "px-2.5 py-1 rounded-lg text-xs font-semibold bg-[#1d4ed8] text-white transition"
+      : isDisabled
+        ? "px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-500 cursor-not-allowed opacity-50"
+        : "px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-200 hover:bg-white/10 transition";
+  });
+}
+
+// ── PHASE 2: THEORY MODULES & PHASE 5: POST-SIMULATION QUIZ ────────────────
+let quizSelections = new Array(QUIZ_QUESTIONS.length).fill(null);
+
+window.toggleTheoryModule = async function(modNum) {
+  if (!currentStudent) return;
+  const key = `m${modNum}`;
+  currentStudent.theoryRead[key] = !currentStudent.theoryRead[key];
+  await persistCurrentStudent();
+  renderTheoryUI();
+  updateNavButtons();
+};
+
+function renderTheoryUI() {
+  if (!currentStudent) return;
+  const tr = currentStudent.theoryRead || { m1: false, m2: false, m3: false };
+  const readCount = (tr.m1 ? 1 : 0) + (tr.m2 ? 1 : 0) + (tr.m3 ? 1 : 0);
+  document.getElementById("theoryProgressBadge").textContent = `${readCount} / 3`;
+
+  [1, 2, 3].forEach(n => {
+    const btn = document.getElementById(`btnMarkMod${n}`);
+    const done = !!tr[`m${n}`];
+    btn.textContent = done ? "Section Understood (Checked)" : "Mark Section Understood";
+    btn.className = done
+      ? "px-3.5 py-1.5 rounded-lg border text-xs font-semibold transition bg-[#15803d] border-[#15803d] text-white"
+      : "px-3.5 py-1.5 rounded-lg border text-xs font-semibold transition bg-slate-50 border-slate-300 text-[#0f2942] hover:border-[#1d4ed8]";
+  });
+
+  const allRead = readCount === 3;
+  document.getElementById("btnUnlockBriefing").disabled = !allRead;
+  document.getElementById("btnUnlockBriefingTop").disabled = !allRead;
+  const stEl = document.getElementById("theoryActionStatus");
+  if (allRead) {
+    stEl.textContent = "All 3 theory modules reviewed. You may now proceed to the Problem Statement and Flight Simulator.";
+    stEl.className = "text-xs font-semibold text-[#15803d]";
+  } else {
+    stEl.textContent = "Mark all 3 engineering theory modules above as understood to unlock the Problem Statement and Flight Simulator.";
+    stEl.className = "text-xs font-medium text-slate-600";
+  }
+}
+
+function renderQuizUI() {
+  if (!currentStudent) return;
+  const m4Passed = !!(currentStudent.milestones?.[4]?.passed);
+  document.getElementById("quizAttemptBadge").textContent = currentStudent.quizAttempts || 0;
+  document.getElementById("quizScoreBadge").textContent = `${currentStudent.quizBestScore || 0} / ${QUIZ_QUESTIONS.length}`;
+  document.getElementById("btnUnlockReport").disabled = !currentStudent.quizPassed;
+
+  document.getElementById("quizLockedBySim").classList.toggle("hidden", m4Passed);
+  document.getElementById("quizQuestionsContainer").classList.toggle("hidden", !m4Passed);
+  document.getElementById("quizActionBar").classList.toggle("hidden", !m4Passed);
+
+  if (m4Passed && document.getElementById("quizQuestionsContainer").children.length === 0) {
+    buildQuizQuestionsDOM();
+  }
+}
+
+function buildQuizQuestionsDOM() {
+  const container = document.getElementById("quizQuestionsContainer");
+  container.innerHTML = QUIZ_QUESTIONS.map((item, qi) => `
+    <div id="quizCard${qi}" class="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5">
+      <div class="text-xs sm:text-sm font-bold text-[#0f2942]">${escapeHTML(item.q)}</div>
+      <div class="grid sm:grid-cols-2 gap-2">
+        ${item.options.map((opt, oi) => `
+          <label class="flex items-start gap-2 p-2.5 rounded-lg bg-white border border-slate-200 hover:border-[#1d4ed8] cursor-pointer text-xs text-slate-700 transition">
+            <input type="radio" name="quizQ${qi}" value="${oi}" onchange="selectQuizOption(${qi}, ${oi})" class="mt-0.5 accent-[#1d4ed8]">
+            <span>${escapeHTML(opt)}</span>
+          </label>
+        `).join("")}
+      </div>
+      <div id="quizFeedback${qi}" class="hidden text-xs p-2.5 rounded-lg"></div>
+    </div>
+  `).join("");
+}
+
+window.selectQuizOption = function(qi, oi) {
+  quizSelections[qi] = oi;
+};
+
+window.submitQuizAttempt = async function() {
+  if (!currentStudent) return;
+  const statusEl = document.getElementById("quizStatusMessage");
+  if (quizSelections.some(v => v === null)) {
+    statusEl.textContent = "Please select an answer for all 6 questions before submitting.";
+    statusEl.className = "text-xs font-semibold text-[#b91c1c]";
+    return;
+  }
+
+  let score = 0;
+  QUIZ_QUESTIONS.forEach((item, qi) => {
+    const isCorrect = quizSelections[qi] === item.correct;
+    if (isCorrect) score++;
+    const fb = document.getElementById(`quizFeedback${qi}`);
+    fb.classList.remove("hidden");
+    if (isCorrect) {
+      fb.className = "text-xs p-2.5 rounded-lg bg-green-50 border border-green-200 text-[#15803d] font-medium";
+      fb.textContent = item.explanation;
+    } else {
+      fb.className = "text-xs p-2.5 rounded-lg bg-red-50 border border-red-200 text-[#b91c1c] font-medium";
+      fb.textContent = "Incorrect. Review Modules 1–3 above and try again.";
+    }
+  });
+
+  currentStudent.quizAttempts = (currentStudent.quizAttempts || 0) + 1;
+  if (score > (currentStudent.quizBestScore || 0)) currentStudent.quizBestScore = score;
+
+  if (score === QUIZ_QUESTIONS.length) {
+    currentStudent.quizPassed = true;
+    statusEl.textContent = `Certification Passed (6 / 6)! You may now open your Official Lab Report and C++ Firmware Export.`;
+    statusEl.className = "text-xs font-bold text-[#15803d]";
+  } else {
+    statusEl.textContent = `Score: ${score} / 6. You need 6 / 6 (100%) to unlock the Lab Report and C++ Export. Correct the highlighted items and resubmit.`;
+    statusEl.className = "text-xs font-bold text-[#b91c1c]";
+  }
+
+  await persistCurrentStudent();
+  renderQuizUI();
+  updateNavButtons();
+};
+
+// ── PHASE 4: PHYSICS ENGINE & FLIGHT SIMULATOR ─────────────────────────────
+let Kp = 0.0, Ki = 0.0, Kd = 0.0;
+let simSpeed = 1;
+let windActive = true; // Compulsory wind gusts across all milestones
+let showGhost = false;
+let running = false;
+let paused = false;
+let crashed = false;
+let missionDone = false;
+let simTime = 0;
+let rotorAngle = 0;
+let animClock = 0;
+let windForce = 0;
+let windTimer = 0;
+let windDuration = 0;
+let nextWindTime = 2.5;
+let rafId = null;
+let lastFrameTs = null;
+let accumulator = 0;
+
+let sim = makeFreshSim();
+let ghost = makeFreshSim();
+let gAlt = [], gSet = [], gThrust = [], gTime = [];
+
+function makeFreshSim() {
+  return {
+    altitude: 0,
+    velocity: 0,
+    accel: 0,
+    netForce: 0,
+    thrust: 0,
+    integral: 0,
+    prevError: 0,
+    stageIdx: 0,
+    hoverTimer: 0,
+    inHoldBand: false,
+    stageStartTime: 0,
+    stageStartAlt: 0,
+    stageSettled: false,
+    settlingTimes: [],
+    maxOvershoot: 0,
+    sseSum: 0,
+    sseCount: 0,
+    zeroCrossings: 0,
+    lastErrSign: 0,
+    gearDeployed: false,
+    touchdownSpeed: null
+  };
+}
+
+function getActiveMilestoneConfig() {
+  return MILESTONE_CONFIGS.find(m => m.id === activeMilestoneId) || MILESTONE_CONFIGS[0];
+}
+
+function renderMilestoneTabs() {
+  if (!currentStudent) return;
+  const tabsEl = document.getElementById("milestoneTabs");
+  tabsEl.innerHTML = MILESTONE_CONFIGS.map(cfg => {
+    const unlocked = cfg.id <= (currentStudent.unlockedMilestone || 1);
+    const msData = currentStudent.milestones[cfg.id];
+    const isSelected = cfg.id === activeMilestoneId;
+    let cls = "py-1.5 px-1 rounded-lg text-[10px] font-bold border text-center transition ";
+    if (!unlocked) {
+      cls += "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed";
+    } else if (isSelected) {
+      cls += "bg-[#0f2942] border-[#0f2942] text-white";
+    } else if (msData && msData.passed) {
+      cls += "bg-green-50 border-green-300 text-[#15803d] hover:bg-green-100";
+    } else {
+      cls += "bg-white border-slate-300 text-[#0f2942] hover:border-[#1d4ed8]";
+    }
+    const statusMark = msData && msData.passed ? " ✓" : !unlocked ? " 🔒" : "";
+    return `<button onclick="selectMilestone(${cfg.id})" ${unlocked ? "" : "disabled"} class="${cls}">${cfg.shortTitle}${statusMark}</button>`;
+  }).join("");
+}
+
+window.selectMilestone = function(id) {
+  if (!currentStudent || id > (currentStudent.unlockedMilestone || 1)) return;
+  activeMilestoneId = id;
+  const cfg = getActiveMilestoneConfig();
+  document.getElementById("msTitle").textContent = cfg.title;
+  document.getElementById("msDesc").textContent = cfg.desc;
+  document.getElementById("milestonePassRuleBadge").textContent = `Pass Cutoff: ≥ ${cfg.passCutoff} / 100`;
+
+  const ffBadge = document.getElementById("hudFeedforwardBadge");
+  ffBadge.textContent = cfg.gravityFeedforward ? "ON (14.72 N)" : "OFF (0.00 N)";
+  ffBadge.className = cfg.gravityFeedforward ? "mono text-[#1d4ed8] ml-0.5" : "mono text-[#b91c1c] ml-0.5";
+
+  windActive = true;
+
+  renderMilestoneTabs();
+  resetSimulation();
+};
+
+function syncGainInputs(source) {
+  const slKp = document.getElementById("slKp");
+  const slKi = document.getElementById("slKi");
+  const slKd = document.getElementById("slKd");
+  const numKp = document.getElementById("numKp");
+  const numKi = document.getElementById("numKi");
+  const numKd = document.getElementById("numKd");
+
+  if (source === "num") {
+    Kp = Math.max(0, Math.min(15, parseFloat(numKp.value) || 0));
+    Ki = Math.max(0, Math.min(5, parseFloat(numKi.value) || 0));
+    Kd = Math.max(0, Math.min(15, parseFloat(numKd.value) || 0));
+    slKp.value = Kp; slKi.value = Ki; slKd.value = Kd;
+  } else {
+    Kp = parseFloat(slKp.value) || 0;
+    Ki = parseFloat(slKi.value) || 0;
+    Kd = parseFloat(slKd.value) || 0;
+    numKp.value = Kp.toFixed(2);
+    numKi.value = Ki.toFixed(2);
+    numKd.value = Kd.toFixed(2);
+  }
+
+  const zeta = Kp > 0 ? Kd / (2 * Math.sqrt(DRONE_MASS * Kp)) : 0;
+  const rhMax = (Kp * Kd) / DRONE_MASS;
+  const zEl = document.getElementById("diagZeta");
+  const rhEl = document.getElementById("diagRH");
+  zEl.textContent = zeta.toFixed(2);
+  zEl.className = zeta >= 0.7 && zeta <= 1.3 ? "text-[#15803d]" : "text-[#0f2942]";
+  rhEl.textContent = rhMax.toFixed(2);
+  rhEl.className = Ki > rhMax && Kp > 0 ? "text-[#b91c1c]" : "text-[#0f2942]";
+
+  if (Kp > 0 || Ki > 0 || Kd > 0) {
+    document.getElementById("zeroGainNudge").classList.add("hidden");
+  }
+}
+
+window.zeroPidGains = function() {
+  document.getElementById("slKp").value = 0;
+  document.getElementById("slKi").value = 0;
+  document.getElementById("slKd").value = 0;
+  syncGainInputs("sl");
+};
+
+["slKp", "slKi", "slKd"].forEach(id => {
+  document.getElementById(id).addEventListener("input", () => syncGainInputs("sl"));
+});
+["numKp", "numKi", "numKd"].forEach(id => {
+  document.getElementById(id).addEventListener("input", () => syncGainInputs("num"));
+});
+
+window.setSimSpeed = function(spd) {
+  simSpeed = spd;
+  [1, 2, 4].forEach(s => {
+    const b = document.getElementById(`spd${s}`);
+    b.className = s === spd
+      ? "px-2 py-0.5 rounded text-[10px] font-bold bg-[#0f2942] text-white"
+      : "px-2 py-0.5 rounded text-[10px] font-semibold text-slate-600 hover:text-[#0f2942]";
+  });
+};
+
+window.onGhostToggleChange = function() {
+  showGhost = document.getElementById("chkGhost").checked;
+};
+
+window.toggleCoachOverlay = function(show) {
+  document.getElementById("scoreCoachPanel").classList.toggle("hidden", !show);
+};
+
+window.toggleStartPause = function() {
+  if (crashed || missionDone) {
+    resetSimulation();
+  }
+  if (!running) {
+    if (Kp === 0 && Ki === 0 && Kd === 0) {
+      document.getElementById("zeroGainNudge").classList.remove("hidden");
+      return;
+    }
+    running = true;
+    paused = false;
+    hideCanvasOverlay();
+    document.getElementById("scoreCoachPanel").classList.add("hidden");
+    document.getElementById("btnShowLastCoach").classList.add("hidden");
+    document.getElementById("btnStartPause").textContent = "Pause Flight";
+  } else {
+    paused = !paused;
+    document.getElementById("btnStartPause").textContent = paused ? "Resume Flight" : "Pause Flight";
+  }
+};
+
+window.resetSimulation = function() {
+  running = false;
+  paused = false;
+  crashed = false;
+  missionDone = false;
+  simTime = 0;
+  windForce = 0;
+  windTimer = 0;
+  windDuration = 0;
+  nextWindTime = 2.0 + Math.random() * 2.5;
+  sim = makeFreshSim();
+  ghost = makeFreshSim();
+  gAlt = []; gSet = []; gThrust = []; gTime = [];
+
+  const cfg = getActiveMilestoneConfig();
+  const sp = cfg.stages[0].setpoint;
+
+  document.getElementById("btnStartPause").textContent = "Launch Drone";
+  document.getElementById("scoreCoachPanel").classList.add("hidden");
+  document.getElementById("btnShowLastCoach").classList.add("hidden");
+  document.getElementById("holdTimerPill").classList.add("hidden");
+  document.getElementById("barThrustVal").textContent = "0.00 N";
+  document.getElementById("barThrustFill").style.width = "0%";
+  document.getElementById("barNetForce").textContent = "0.00 N";
+  document.getElementById("barAccel").textContent = "0.00 m/s²";
+  const wfEl = document.getElementById("barWindForce");
+  wfEl.textContent = "0.00 N";
+  wfEl.className = "mono text-slate-600 ml-0.5 w-14 inline-block text-right";
+
+  document.getElementById("hudAlt").textContent = "0.00 m";
+  document.getElementById("hudVel").textContent = "0.00 m/s";
+  document.getElementById("hudSet").textContent = sp.toFixed(1) + " m";
+  document.getElementById("hudErr").textContent = "+" + sp.toFixed(2) + " m";
+  document.getElementById("hudHold").textContent = `0.0 / ${cfg.stages[0].hover.toFixed(1)} s`;
+  document.getElementById("hudGear").textContent = "RETRACTED";
+  document.getElementById("hudTime").textContent = "0.0 s";
+  document.getElementById("liveOutBadge").textContent = "T = 0.00 N";
+  document.getElementById("codeErrVal").textContent = sp.toFixed(2) + " m";
+  document.getElementById("codePVal").textContent = "0.00 N";
+  document.getElementById("codeIVal").textContent = "0.00 N";
+  document.getElementById("codeDVal").textContent = "0.00 N";
+
+  renderStagePills();
+  showCanvasOverlay("Ready on Ground (0.0 m)", "Calculate Kp, Ki, Kd from Module 2 formulas and click Launch Drone.", false);
+  drawScene();
+  drawGraph();
+};
+
+function showCanvasOverlay(title, sub, isError) {
+  const box = document.getElementById("canvasOverlayBox");
+  const card = document.getElementById("canvasOverlayCard");
+  const tEl = document.getElementById("overlayTitle");
+  document.getElementById("overlaySub").textContent = sub;
+  tEl.textContent = title;
+  card.className = isError
+    ? "bg-white border-2 border-[#b91c1c] rounded-xl px-5 py-3.5 text-center shadow-lg max-w-md"
+    : "bg-white border-2 border-[#0f2942] rounded-xl px-5 py-3.5 text-center shadow-lg max-w-md";
+  tEl.className = isError ? "text-sm font-bold text-[#b91c1c]" : "text-sm font-bold text-[#0f2942]";
+  box.classList.remove("hidden");
+}
+function hideCanvasOverlay() {
+  document.getElementById("canvasOverlayBox").classList.add("hidden");
+}
+
+function renderStagePills() {
+  const cfg = getActiveMilestoneConfig();
+  const bar = document.getElementById("stagePillsBar");
+  bar.innerHTML = cfg.stages.map((st, idx) => {
+    const done = idx < sim.stageIdx || missionDone;
+    const active = idx === sim.stageIdx && !missionDone;
+    const cls = done
+      ? "bg-[#15803d] text-white border-[#15803d]"
+      : active
+        ? "bg-[#1d4ed8] text-white border-[#1d4ed8]"
+        : "bg-white/90 text-slate-600 border-slate-300";
+    return `<span class="px-2 py-0.5 rounded-full border text-[10px] mono font-bold ${cls}">${st.setpoint}m${st.deployGear ? " ⚙" : ""}</span>`;
+  }).join("");
+}
+
+function stepPhysics(dt) {
+  const cfg = getActiveMilestoneConfig();
+  const curStage = cfg.stages[sim.stageIdx];
+  const sp = curStage.setpoint;
+
+  // Wind gust generator
+  if (windActive) {
+    windTimer += dt;
+    if (windTimer >= nextWindTime) {
+      windForce = (Math.random() * 5.0 - 2.5); // -2.5 N to +2.5 N
+      windDuration = 1.2 + Math.random() * 1.5;
+      windTimer = 0;
+      nextWindTime = 3.0 + Math.random() * 4.0;
+    }
+    if (windTimer > windDuration) windForce = 0;
+  } else {
+    windForce = 0;
+  }
+
+  // PID Computation (Derivative-on-Measurement to eliminate setpoint kick)
+  const error = sp - sim.altitude;
+  const P = Kp * error;
+
+  // Conditional integration (anti-windup)
+  const ff = cfg.gravityFeedforward ? DRONE_WEIGHT : 0;
+  const rawD = -Kd * sim.velocity;
+  const tentativeT = ff + P + Ki * sim.integral + rawD;
+  const saturatedHigh = tentativeT >= MAX_THRUST && error > 0;
+  const saturatedLow = tentativeT <= 0 && error < 0;
+  if (!saturatedHigh && !saturatedLow) {
+    sim.integral = Math.max(-45, Math.min(45, sim.integral + error * dt));
+  }
+  const I = Ki * sim.integral;
+  const D = rawD;
+  sim.prevError = error;
+
+  const T_total = Math.max(0, Math.min(MAX_THRUST, ff + P + I + D));
+  const F_drag = -AIR_DRAG_C * sim.velocity;
+  const F_net = T_total - DRONE_WEIGHT + F_drag + windForce;
+  const a_z = F_net / DRONE_MASS;
+
+  sim.thrust = T_total;
+  sim.netForce = F_net;
+  sim.accel = a_z;
+  sim.velocity += a_z * dt;
+  sim.altitude += sim.velocity * dt;
+
+  // Track directional overshoot (above setpoint when climbing, below setpoint when descending)
+  if (sp > 0) {
+    const stepDir = sp >= sim.stageStartAlt ? 1 : -1;
+    const over = stepDir === 1 ? (sim.altitude - sp) : (sp - sim.altitude);
+    if (over > sim.maxOvershoot) sim.maxOvershoot = over;
+  }
+  const errSign = Math.abs(error) > 0.35 ? Math.sign(error) : 0;
+  if (errSign !== 0 && sim.lastErrSign !== 0 && errSign !== sim.lastErrSign) {
+    sim.zeroCrossings++;
+  }
+  if (errSign !== 0) sim.lastErrSign = errSign;
+
+  // Automatic Landing Gear Deployment when reaching <= 21.5 m on gear stage
+  if (curStage.deployGear && !sim.gearDeployed && sim.altitude <= 21.5) {
+    sim.gearDeployed = true;
+  }
+
+  // Ceiling crash check
+  if (sim.altitude > WORLD_MAX_ALT) {
+    sim.altitude = WORLD_MAX_ALT;
+    triggerCrash("Altitude Ceiling Exceeded (> 62 m). Reduce Kp or increase Kd.");
+    return;
+  }
+
+  // Ground contact & touchdown handling
+  if (sim.altitude <= 0) {
+    if (sim.stageIdx === 0 && simTime < 3.0 && sim.velocity <= 0) {
+      sim.altitude = 0;
+      sim.velocity = 0;
+      sim.accel = 0;
+    } else if (sp === 0 && sim.stageIdx === cfg.stages.length - 1) {
+      sim.touchdownSpeed = Math.abs(sim.velocity);
+      sim.altitude = 0;
+      sim.velocity = 0;
+      sim.accel = 0;
+      if (!sim.gearDeployed) {
+        triggerCrash(`Landing Gear Not Deployed at touchdown (${sim.touchdownSpeed.toFixed(2)} m/s).`);
+      } else if (sim.touchdownSpeed > 2.2) {
+        triggerCrash(`Hard Impact Landing at ${sim.touchdownSpeed.toFixed(2)} m/s (Soft Touchdown: ≤ 0.60 m/s, Max Safe: 2.20 m/s).`);
+      } else {
+        completeMission();
+      }
+      return;
+    } else if (sim.velocity < -2.2 && simTime > 3.0) {
+      sim.altitude = 0;
+      triggerCrash(`Ground Impact at ${Math.abs(sim.velocity).toFixed(2)} m/s before landing stage.`);
+      return;
+    } else {
+      sim.altitude = 0;
+      if (sim.velocity < 0) sim.velocity = 0;
+    }
+  }
+
+  // Hover hold & stage progression
+  if (curStage.hover > 0) {
+    const inBand = Math.abs(error) <= 1.2 && Math.abs(sim.velocity) <= 0.8;
+    sim.inHoldBand = inBand;
+    if (inBand) {
+      if (!sim.stageSettled) {
+        sim.stageSettled = true;
+        sim.settlingTimes.push(simTime - sim.stageStartTime);
+      }
+      sim.sseSum += Math.abs(error);
+      sim.sseCount++;
+      sim.hoverTimer += dt;
+      if (sim.hoverTimer >= curStage.hover) {
+        if (sim.stageIdx < cfg.stages.length - 1) {
+          sim.stageIdx++;
+          sim.hoverTimer = 0;
+          sim.inHoldBand = false;
+          sim.stageStartTime = simTime;
+          sim.stageStartAlt = sim.altitude;
+          sim.stageSettled = false;
+          sim.lastErrSign = 0;
+          renderStagePills();
+        } else {
+          completeMission();
+          return;
+        }
+      }
+    } else {
+      sim.hoverTimer = Math.max(0, sim.hoverTimer - dt * 0.4);
+    }
+  } else {
+    sim.inHoldBand = false;
+  }
+
+  // Step Ideal Ghost Drone
+  stepGhostPhysics(dt, cfg);
+
+  simTime += dt;
+  rotorAngle += 0.35 + (T_total / MAX_THRUST) * 0.45;
+
+  // Record telemetry graph
+  gAlt.push(sim.altitude);
+  gSet.push(sp);
+  gThrust.push(T_total);
+  gTime.push(simTime);
+  if (gAlt.length > GRAPH_MAX_PTS) {
+    gAlt.shift(); gSet.shift(); gThrust.shift(); gTime.shift();
+  }
+
+  updateLiveHUD(P, I, D, T_total, error, sp, curStage);
+}
+
+function stepGhostPhysics(dt, cfg) {
+  if (!showGhost) return;
+  const gStage = cfg.stages[ghost.stageIdx];
+  const sp = gStage.setpoint;
+  const err = sp - ghost.altitude;
+  const gKp = 3.2, gKi = 1.1, gKd = 4.6;
+  const ff = cfg.gravityFeedforward ? DRONE_WEIGHT : 0;
+  ghost.integral = Math.max(-40, Math.min(40, ghost.integral + err * dt));
+  const T = Math.max(0, Math.min(MAX_THRUST, ff + gKp * err + gKi * ghost.integral - gKd * ghost.velocity));
+  const az = (T - DRONE_WEIGHT - AIR_DRAG_C * ghost.velocity) / DRONE_MASS;
+  ghost.velocity += az * dt;
+  ghost.altitude = Math.max(0, Math.min(WORLD_MAX_ALT, ghost.altitude + ghost.velocity * dt));
+  if (gStage.deployGear && ghost.altitude <= 21.5) ghost.gearDeployed = true;
+  if (gStage.hover > 0 && Math.abs(err) <= 1.2 && Math.abs(ghost.velocity) <= 0.8) {
+    ghost.hoverTimer += dt;
+    if (ghost.hoverTimer >= gStage.hover && ghost.stageIdx < cfg.stages.length - 1) {
+      ghost.stageIdx++;
+      ghost.hoverTimer = 0;
+    }
+  }
+}
+
+function updateLiveHUD(P, I, D, T_total, error, sp, curStage) {
+  document.getElementById("barThrustVal").textContent = T_total.toFixed(2) + " N";
+  document.getElementById("barThrustFill").style.width = `${Math.min(100, (T_total / MAX_THRUST) * 100)}%`;
+  const nf = sim.netForce;
+  document.getElementById("barNetForce").textContent = (nf >= 0 ? "+" : "") + nf.toFixed(2) + " N";
+  document.getElementById("barAccel").textContent = (sim.accel >= 0 ? "+" : "") + sim.accel.toFixed(2) + " m/s²";
+  const wfEl = document.getElementById("barWindForce");
+  wfEl.textContent = (windForce >= 0 ? "+" : "") + windForce.toFixed(2) + " N";
+  wfEl.className = Math.abs(windForce) > 0.05
+    ? "mono text-[#b91c1c] ml-0.5 w-14 inline-block text-right"
+    : "mono text-slate-600 ml-0.5 w-14 inline-block text-right";
+
+  document.getElementById("hudAlt").textContent = sim.altitude.toFixed(2) + " m";
+  document.getElementById("hudVel").textContent = (sim.velocity >= 0 ? "+" : "") + sim.velocity.toFixed(2) + " m/s";
+  document.getElementById("hudSet").textContent = sp.toFixed(1) + " m";
+  const errEl = document.getElementById("hudErr");
+  errEl.textContent = (error >= 0 ? "+" : "") + error.toFixed(2) + " m";
+  errEl.className = Math.abs(error) > 4 ? "text-[#b91c1c]" : Math.abs(error) <= 1.2 ? "text-[#15803d]" : "text-[#0f2942]";
+
+  document.getElementById("hudHold").textContent = curStage.hover > 0
+    ? `${sim.hoverTimer.toFixed(1)} / ${curStage.hover.toFixed(1)} s`
+    : "LANDING";
+  const gearEl = document.getElementById("hudGear");
+  gearEl.textContent = sim.gearDeployed ? "DEPLOYED" : "RETRACTED";
+  gearEl.className = sim.gearDeployed ? "text-[#15803d] font-bold" : "text-slate-600";
+  document.getElementById("hudTime").textContent = simTime.toFixed(1) + " s";
+
+  // Top-Center Animated Hold Timer Pill
+  const holdPill = document.getElementById("holdTimerPill");
+  const holdIcon = document.getElementById("holdStopwatchIcon");
+  const holdTxt = document.getElementById("holdPillText");
+  const holdBar = document.getElementById("holdPillBar");
+  if (running && curStage.hover > 0) {
+    holdPill.classList.remove("hidden");
+    const pct = Math.min(100, (sim.hoverTimer / curStage.hover) * 100);
+    holdBar.style.width = `${pct}%`;
+    if (sim.inHoldBand) {
+      holdPill.className = "absolute top-2.5 left-1/2 -translate-x-1/2 bg-green-50/95 border border-[#15803d] rounded-full px-3 py-1 shadow-sm flex items-center gap-2 pointer-events-none";
+      holdIcon.setAttribute("class", "w-4 h-4 text-[#15803d] shrink-0 hold-icon-pulse");
+      holdTxt.className = "mono text-[11px] font-bold text-[#15803d]";
+      holdTxt.textContent = `HOLDING ${sp}m: ${sim.hoverTimer.toFixed(1)} / ${curStage.hover.toFixed(1)} s`;
+    } else {
+      holdPill.className = "absolute top-2.5 left-1/2 -translate-x-1/2 bg-white/95 border border-slate-300 rounded-full px-3 py-1 shadow-sm flex items-center gap-2 pointer-events-none";
+      holdIcon.setAttribute("class", "w-4 h-4 text-[#1d4ed8] shrink-0");
+      holdTxt.className = "mono text-[11px] font-bold text-[#0f2942]";
+      holdTxt.textContent = `TARGET ${sp}m: ${sim.hoverTimer.toFixed(1)} / ${curStage.hover.toFixed(1)} s`;
+    }
+  } else {
+    holdPill.classList.add("hidden");
+  }
+
+  // Live code monitor
+  document.getElementById("liveOutBadge").textContent = `T = ${T_total.toFixed(2)} N`;
+  document.getElementById("codeErrVal").textContent = `${error.toFixed(2)} m`;
+  document.getElementById("codePVal").textContent = `${P.toFixed(2)} N`;
+  document.getElementById("codeIVal").textContent = `${I.toFixed(2)} N`;
+  document.getElementById("codeDVal").textContent = `${D.toFixed(2)} N`;
+
+  const maxTerm = Math.max(Math.abs(P), Math.abs(I), Math.abs(D), 0.1);
+  document.getElementById("codeLineP").className = "code-line" + (Math.abs(P) === maxTerm ? " code-active" : "");
+  document.getElementById("codeLineI").className = "code-line" + (Math.abs(I) === maxTerm ? " code-active" : "");
+  document.getElementById("codeLineD").className = "code-line" + (Math.abs(D) === maxTerm ? " code-active" : "");
+}
+
+function triggerCrash(reason) {
+  crashed = true;
+  running = false;
+  document.getElementById("holdTimerPill").classList.add("hidden");
+  document.getElementById("btnStartPause").textContent = "Retry Trial";
+  evaluateAndRecordTrial(false, reason);
+}
+
+function completeMission() {
+  missionDone = true;
+  running = false;
+  document.getElementById("holdTimerPill").classList.add("hidden");
+  renderStagePills();
+  document.getElementById("btnStartPause").textContent = "Run Another Trial";
+  evaluateAndRecordTrial(true, null);
+}
+
+async function evaluateAndRecordTrial(didComplete, crashReason) {
+  const cfg = getActiveMilestoneConfig();
+  const cutoff = cfg.passCutoff;
+  const totalStages = cfg.stages.length;
+  const doneStages = didComplete ? totalStages : sim.stageIdx;
+
+  // 1. Overshoot Score (25 pts)
+  const overshootScore = Math.max(0, Math.round(25 - Math.max(0, sim.maxOvershoot - 0.5) * 4.5));
+
+  // 2. Settling Time Score (25 pts)
+  const avgSettle = sim.settlingTimes.length > 0
+    ? sim.settlingTimes.reduce((a, b) => a + b, 0) / sim.settlingTimes.length
+    : 25;
+  const settlingScore = Math.max(0, Math.min(25, Math.round(25 - Math.max(0, avgSettle - 5.5) * 2.0)));
+
+  // 3. Steady-State Error Score (25 pts)
+  const avgSSE = sim.sseCount > 0 ? sim.sseSum / sim.sseCount : 2.0;
+  const sseScore = Math.max(0, Math.min(25, Math.round(25 - avgSSE * 18)));
+
+  // 4. Completion & Touchdown Smoothness (25 pts)
+  let landingScore = Math.round((doneStages / totalStages) * 15);
+  const landVel = sim.touchdownSpeed !== null ? sim.touchdownSpeed : Math.abs(sim.velocity);
+  if (didComplete) {
+    if (cfg.id === 4) {
+      if (sim.gearDeployed && landVel <= 0.6) {
+        landingScore = 25;
+      } else if (sim.gearDeployed && landVel <= 2.2) {
+        landingScore = Math.max(14, Math.round(25 - ((landVel - 0.6) / 1.6) * 11));
+      } else {
+        landingScore = 0;
+      }
+    } else {
+      landingScore = 25;
+    }
+  }
+  if (crashed) landingScore = 0;
+
+  const totalScore = Math.max(0, Math.min(100, overshootScore + settlingScore + sseScore + landingScore));
+  const passed = totalScore >= cutoff && didComplete && !crashed;
+
+  const tips = [];
+  if (crashed && crashReason) tips.push(`Crash Analysis: ${crashReason}`);
+  if (sim.maxOvershoot > 1.8) {
+    const idealKd = (2 * 1.0 * Math.sqrt(DRONE_MASS * Math.max(0.5, Kp))).toFixed(2);
+    tips.push(`Excessive Overshoot (${sim.maxOvershoot.toFixed(2)} m): Increase Kd toward critical damping Kd ≈ 2√(1.5·Kp) ≈ ${idealKd} N·s/m, or reduce Kp.`);
+  }
+  if (sim.zeroCrossings > 4) {
+    tips.push(`Oscillatory Response (${sim.zeroCrossings} crossings): Increase Kd to raise damping ratio ζ and ensure Ki remains well below Routh-Hurwitz limit Kp·Kd/m.`);
+  }
+  if (!cfg.gravityFeedforward && avgSSE > 0.4) {
+    tips.push(`Steady-State Gravity Droop (SSE = ${avgSSE.toFixed(2)} m): Increase Ki (try 0.80–1.50 N/(m·s)) so the integral carries the full 14.72 N weight.`);
+  }
+  if (cfg.id === 4 && didComplete && landVel > 0.6) {
+    tips.push(`Acceptable Touchdown (${landVel.toFixed(2)} m/s): Increase Kd live during the 20m → 0m descent to brake vertical speed to ≤ 0.60 m/s for full touchdown bonus.`);
+  }
+  if (tips.length === 0) {
+    tips.push("Well-tuned closed-loop response: clean damping, accurate altitude hold, and controlled vertical speed.");
+  }
+
+  // Render Coach Overlay
+  hideCanvasOverlay();
+  document.getElementById("scoreCoachPanel").classList.remove("hidden");
+  document.getElementById("btnShowLastCoach").classList.remove("hidden");
+  document.getElementById("coachScoreBig").textContent = `${totalScore} / 100`;
+  document.getElementById("coachScoreBig").className = passed
+    ? "text-2xl font-bold mono text-[#15803d]"
+    : "text-2xl font-bold mono text-[#b91c1c]";
+  document.getElementById("coachResultBadge").textContent = passed
+    ? `PASSED (Cutoff ≥ ${cutoff})`
+    : crashed
+      ? `CRASHED (Need ≥ ${cutoff})`
+      : `BELOW CUTOFF (Need ≥ ${cutoff})`;
+  document.getElementById("coachResultBadge").className = passed
+    ? "text-xs font-bold text-[#15803d]"
+    : "text-xs font-bold text-[#b91c1c]";
+
+  document.getElementById("scOvershoot").textContent = `${overshootScore}/25`;
+  document.getElementById("scSettling").textContent = `${settlingScore}/25`;
+  document.getElementById("scSSE").textContent = `${sseScore}/25`;
+  document.getElementById("scLanding").textContent = `${landingScore}/25`;
+  document.getElementById("coachTipsBox").innerHTML = tips.map(t => `<div>&bull; ${escapeHTML(t)}</div>`).join("");
+
+  // Persist to Student Record & Firestore
+  if (currentStudent) {
+    const msRec = currentStudent.milestones[cfg.id];
+    msRec.attempts = (msRec.attempts || 0) + 1;
+    if (totalScore > msRec.bestScore) {
+      msRec.bestScore = totalScore;
+      msRec.bestGains = { kp: Kp, ki: Ki, kd: Kd };
+    }
+    if (passed) {
+      msRec.passed = true;
+      if (cfg.id < 4 && (currentStudent.unlockedMilestone || 1) <= cfg.id) {
+        currentStudent.unlockedMilestone = cfg.id + 1;
+      }
+    }
+
+    currentStudent.trials = currentStudent.trials || [];
+    currentStudent.trials.unshift({
+      time: new Date().toLocaleTimeString(),
+      milestone: cfg.id,
+      score: totalScore,
+      passed,
+      crashed,
+      kp: Number(Kp.toFixed(2)),
+      ki: Number(Ki.toFixed(2)),
+      kd: Number(Kd.toFixed(2)),
+      overshoot: Number(sim.maxOvershoot.toFixed(2)),
+      sse: Number(avgSSE.toFixed(2)),
+      touchdown: cfg.id === 4 ? Number(landVel.toFixed(2)) : null
+    });
+    if (currentStudent.trials.length > 40) currentStudent.trials.pop();
+
+    await persistCurrentStudent();
+    renderMilestoneTabs();
+    updateNavButtons();
+  }
+
+  const actRow = document.getElementById("coachActionRow");
+  if (passed && cfg.id < 4) {
+    actRow.innerHTML = `
+      <button onclick="selectMilestone(${cfg.id + 1})" class="flex-1 py-2 rounded-lg bg-[#1d4ed8] hover:bg-[#0f2942] text-white text-xs font-semibold transition">Unlock &amp; Start Milestone ${cfg.id + 1} &rarr;</button>
+      <button onclick="resetSimulation()" class="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#0f2942] border border-slate-300 text-xs font-semibold transition">Retry</button>`;
+  } else if (passed && cfg.id === 4) {
+    actRow.innerHTML = `
+      <button onclick="navigatePhase(5)" class="flex-1 py-2 rounded-lg bg-[#15803d] hover:bg-[#0f2942] text-white text-xs font-semibold transition">Proceed to Certification Quiz &rarr;</button>
+      <button onclick="resetSimulation()" class="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#0f2942] border border-slate-300 text-xs font-semibold transition">Retry</button>`;
+  } else {
+    actRow.innerHTML = `<button onclick="resetSimulation()" class="w-full py-2 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white text-xs font-semibold transition">Reset &amp; Retune Gains</button>`;
+  }
+}
+
+// ── CANVAS DRAWING (DRONE ARENA + ANIMATED HOLD TIMER + DUAL TELEMETRY GRAPH) ──
+const droneCanvas = document.getElementById("droneCanvas");
+const graphCanvas = document.getElementById("graphCanvas");
+const dctx = droneCanvas.getContext("2d");
+const gctx = graphCanvas.getContext("2d");
+
+function resizeCanvases() {
+  if (!droneCanvas || !graphCanvas) return;
+  const dw = droneCanvas.clientWidth, dh = droneCanvas.clientHeight;
+  if (dw > 0 && dh > 0 && (droneCanvas.width !== dw || droneCanvas.height !== dh)) {
+    droneCanvas.width = dw; droneCanvas.height = dh;
+  }
+  const gw = graphCanvas.clientWidth, gh = graphCanvas.clientHeight;
+  if (gw > 0 && gh > 0 && (graphCanvas.width !== gw || graphCanvas.height !== gh)) {
+    graphCanvas.width = gw; graphCanvas.height = gh;
+  }
+}
+
+function altToY(alt, H) {
+  const groundY = H - 34;
+  const topPad = 24;
+  return groundY - (alt / WORLD_MAX_ALT) * (groundY - topPad);
+}
+
+function drawHoldTimerRing(ctx, cx, cy, progress, holdSec, targetSec, isHolding) {
+  ctx.save();
+  const radius = 26;
+
+  // Soft pulsing halo when actively holding inside tolerance band
+  if (isHolding) {
+    const pulseR = radius + 4 + Math.sin(animClock * 7) * 3.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, pulseR, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(21, 128, 61, 0.14)";
+    ctx.fill();
+  }
+
+  // White badge disc
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+  ctx.fill();
+  ctx.lineWidth = 3.5;
+  ctx.strokeStyle = "#e2e8f0";
+  ctx.stroke();
+
+  // Animated circular progress arc
+  const startAng = -Math.PI / 2;
+  const endAng = startAng + Math.max(0.02, Math.min(1, progress)) * Math.PI * 2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, startAng, endAng);
+  ctx.lineWidth = 4;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = isHolding ? "#15803d" : "#1d4ed8";
+  ctx.stroke();
+
+  // Animated stopwatch icon inside top half of ring
+  const iconY = cy - 7;
+  const iconR = 6.5;
+  ctx.strokeStyle = isHolding ? "#15803d" : "#0f2942";
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  ctx.arc(cx, iconY, iconR, 0, Math.PI * 2);
+  ctx.stroke();
+  // Stopwatch crown button
+  ctx.beginPath();
+  ctx.moveTo(cx - 2.5, iconY - iconR - 2.5);
+  ctx.lineTo(cx + 2.5, iconY - iconR - 2.5);
+  ctx.moveTo(cx, iconY - iconR - 2.5);
+  ctx.lineTo(cx, iconY - iconR);
+  ctx.stroke();
+  // Sweeping stopwatch hand
+  const handAng = -Math.PI / 2 + (holdSec % 2) * Math.PI;
+  ctx.beginPath();
+  ctx.moveTo(cx, iconY);
+  ctx.lineTo(cx + Math.cos(handAng) * 4.5, iconY + Math.sin(handAng) * 4.5);
+  ctx.stroke();
+
+  // Digital hold readout inside bottom half of ring
+  ctx.fillStyle = isHolding ? "#15803d" : "#0f2942";
+  ctx.font = "bold 9px 'JetBrains Mono', monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(`${holdSec.toFixed(1)}s`, cx, cy + 12);
+
+  // Label beneath ring
+  ctx.fillStyle = isHolding ? "#15803d" : "#475569";
+  ctx.font = "bold 9px 'JetBrains Mono', monospace";
+  ctx.fillText(isHolding ? `HOLD / ${targetSec}s` : `STABILIZE`, cx, cy + radius + 12);
+
+  ctx.restore();
+}
+
+function drawDroneBody(ctx, x, y, alpha, gearOut, rotor, thrustN) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x, y);
+
+  // Arms
+  ctx.strokeStyle = "#334155";
+  ctx.lineWidth = 3.5;
+  ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(-34, 0); ctx.lineTo(34, 0); ctx.stroke();
+
+  // Central Fuselage
+  ctx.fillStyle = "#0f2942";
+  ctx.strokeStyle = "#1d4ed8";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.roundRect(-14, -7, 28, 14, 4);
+  ctx.fill(); ctx.stroke();
+
+  // Rotors
+  [-30, -14, 14, 30].forEach((rx, idx) => {
+    ctx.save();
+    ctx.translate(rx, -6);
+    const bladeLen = 9 + Math.sin(rotor * (idx % 2 === 0 ? 1 : -1)) * 2.5;
+    ctx.strokeStyle = "#1d4ed8";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-bladeLen, 0); ctx.lineTo(bladeLen, 0); ctx.stroke();
+    ctx.fillStyle = "#0f2942";
+    ctx.beginPath(); ctx.arc(0, 0, 2, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  });
+
+  // Landing Gear
+  if (gearOut) {
+    ctx.strokeStyle = "#15803d";
+    ctx.lineWidth = 2.2;
+    ctx.beginPath(); ctx.moveTo(-14, 7); ctx.lineTo(-20, 20); ctx.lineTo(-10, 20); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(14, 7); ctx.lineTo(20, 20); ctx.lineTo(10, 20); ctx.stroke();
+  } else {
+    ctx.strokeStyle = "#64748b";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(-12, 6); ctx.lineTo(-15, 10); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(12, 6); ctx.lineTo(15, 10); ctx.stroke();
+  }
+
+  // Live Force Vectors (for main drone only)
+  if (alpha === 1) {
+    const tLen = Math.min(50, (thrustN / MAX_THRUST) * 50);
+    if (tLen > 2) {
+      ctx.strokeStyle = "#1d4ed8";
+      ctx.lineWidth = 2.2;
+      ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(0, -10 - tLen); ctx.stroke();
+      ctx.fillStyle = "#1d4ed8";
+      ctx.beginPath();
+      ctx.moveTo(0, -14 - tLen);
+      ctx.lineTo(-4, -8 - tLen);
+      ctx.lineTo(4, -8 - tLen);
+      ctx.closePath(); ctx.fill();
+    }
+    const wLen = (DRONE_WEIGHT / MAX_THRUST) * 50;
+    ctx.strokeStyle = "rgba(185, 28, 28, 0.7)";
+    ctx.lineWidth = 1.8;
+    ctx.beginPath(); ctx.moveTo(0, 10); ctx.lineTo(0, 10 + wLen); ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function drawScene() {
+  resizeCanvases();
+  const W = droneCanvas.width, H = droneCanvas.height;
+  if (!W || !H) return;
+
+  dctx.clearRect(0, 0, W, H);
+  const cfg = getActiveMilestoneConfig();
+  const curStage = cfg.stages[sim.stageIdx];
+  const sp = curStage.setpoint;
+
+  // Clean technical sky background
+  const sky = dctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, "#f8fafc");
+  sky.addColorStop(1, "#e2e8f0");
+  dctx.fillStyle = sky;
+  dctx.fillRect(0, 0, W, H);
+
+  const groundY = H - 34;
+  const rulerX = 44;
+
+  // Horizontal altitude gridlines
+  dctx.font = "10px 'JetBrains Mono', monospace";
+  for (let m = 0; m <= 60; m += 10) {
+    const ry = altToY(m, H);
+    dctx.strokeStyle = m === 0 ? "#94a3b8" : "#cbd5e1";
+    dctx.lineWidth = m === 0 ? 1.5 : 0.75;
+    dctx.beginPath(); dctx.moveTo(rulerX, ry); dctx.lineTo(W, ry); dctx.stroke();
+
+    dctx.fillStyle = "#475569";
+    dctx.textAlign = "right";
+    dctx.fillText(m + "m", rulerX - 6, ry + 3);
+  }
+
+  // Shaded ±1.2 m Hold Tolerance Band around Setpoint
+  if (curStage.hover > 0) {
+    const bandTop = altToY(Math.min(WORLD_MAX_ALT, sp + 1.2), H);
+    const bandBot = altToY(Math.max(0, sp - 1.2), H);
+    dctx.fillStyle = sim.inHoldBand ? "rgba(21, 128, 61, 0.14)" : "rgba(29, 78, 216, 0.08)";
+    dctx.fillRect(rulerX, bandTop, W - rulerX, bandBot - bandTop);
+  }
+
+  // Ground pad strip
+  dctx.fillStyle = "#cbd5e1";
+  dctx.fillRect(0, groundY, W, H - groundY);
+  dctx.strokeStyle = "#0f2942";
+  dctx.lineWidth = 2;
+  dctx.beginPath(); dctx.moveTo(0, groundY); dctx.lineTo(W, groundY); dctx.stroke();
+
+  // Landing Pad "H"
+  const padX = W / 2;
+  dctx.fillStyle = "#0f2942";
+  dctx.fillRect(padX - 42, groundY - 4, 84, 5);
+  dctx.fillStyle = "#0f2942";
+  dctx.font = "bold 10px 'JetBrains Mono', monospace";
+  dctx.textAlign = "center";
+  dctx.fillText("LANDING PAD (0.0 m)", padX, groundY + 19);
+
+  // Setpoint Dashed Line
+  const spY = altToY(sp, H);
+  dctx.save();
+  dctx.setLineDash([7, 4]);
+  dctx.strokeStyle = sim.inHoldBand ? "#15803d" : "#b91c1c";
+  dctx.lineWidth = 1.6;
+  dctx.beginPath(); dctx.moveTo(rulerX, spY); dctx.lineTo(W - 10, spY); dctx.stroke();
+  dctx.restore();
+
+  dctx.fillStyle = sim.inHoldBand ? "#15803d" : "#b91c1c";
+  dctx.font = "bold 10px 'JetBrains Mono', monospace";
+  dctx.textAlign = "left";
+  dctx.fillText(`TARGET: ${sp.toFixed(1)} m`, rulerX + 8, Math.max(16, spY - 6));
+
+  // Wind Gust Readout
+  if (windActive && Math.abs(windForce) > 0.05) {
+    dctx.fillStyle = "#b91c1c";
+    dctx.font = "bold 10px 'JetBrains Mono', monospace";
+    dctx.fillText(`WIND GUST: ${windForce > 0 ? "+" : ""}${windForce.toFixed(2)} N`, rulerX + 8, 48);
+  }
+
+  // Live Tuning Prompt during Final 20m -> 0m Descent
+  if (running && sp === 0 && sim.stageIdx === cfg.stages.length - 1) {
+    dctx.fillStyle = "#1d4ed8";
+    dctx.font = "bold 10px 'JetBrains Mono', monospace";
+    dctx.textAlign = "left";
+    dctx.fillText("FINAL DESCENT (20m → 0m): Adjust Kp / Ki / Kd live to brake ≤ 0.6 m/s", rulerX + 8, 64);
+  }
+
+  // Ghost Drone
+  if (showGhost && running) {
+    drawDroneBody(dctx, padX - 65, altToY(ghost.altitude, H), 0.35, ghost.gearDeployed, rotorAngle, DRONE_WEIGHT);
+  }
+
+  // Main Drone
+  const droneY = altToY(sim.altitude, H) - (sim.gearDeployed ? 14 : 6);
+  drawDroneBody(dctx, padX, droneY, 1, sim.gearDeployed, rotorAngle, sim.thrust);
+
+  // Animated Hold & Timer Ring beside Drone when holding or accumulating hold time
+  if (running && curStage.hover > 0 && (sim.inHoldBand || sim.hoverTimer > 0.05)) {
+    const ringX = Math.min(W - 185, padX + 82);
+    const ringY = Math.max(46, Math.min(groundY - 48, droneY));
+    drawHoldTimerRing(
+      dctx,
+      ringX,
+      ringY,
+      sim.hoverTimer / curStage.hover,
+      sim.hoverTimer,
+      curStage.hover,
+      sim.inHoldBand
+    );
+  }
+}
+
+function drawGraph() {
+  const W = graphCanvas.width, H = graphCanvas.height;
+  if (!W || !H) return;
+
+  gctx.clearRect(0, 0, W, H);
+  gctx.fillStyle = "#ffffff";
+  gctx.fillRect(0, 0, W, H);
+
+  const pad = { l: 40, r: 10, t: 22, b: 20 };
+  const pw = W - pad.l - pad.r;
+  const ph = H - pad.t - pad.b;
+
+  // Grid & Y labels
+  gctx.font = "10px 'JetBrains Mono', monospace";
+  for (let i = 0; i <= 4; i++) {
+    const gy = pad.t + (i / 4) * ph;
+    gctx.strokeStyle = "#f1f5f9";
+    gctx.lineWidth = 1;
+    gctx.beginPath(); gctx.moveTo(pad.l, gy); gctx.lineTo(pad.l + pw, gy); gctx.stroke();
+
+    const altVal = Math.round(WORLD_MAX_ALT * (1 - i / 4));
+    gctx.fillStyle = "#64748b";
+    gctx.textAlign = "right";
+    gctx.fillText(`${altVal}m`, pad.l - 5, gy + 3);
+  }
+
+  // Axis frame
+  gctx.strokeStyle = "#cbd5e1";
+  gctx.lineWidth = 1;
+  gctx.strokeRect(pad.l, pad.t, pw, ph);
+
+  if (gAlt.length < 2) {
+    gctx.fillStyle = "#94a3b8";
+    gctx.textAlign = "center";
+    gctx.fillText("Real-Time Altitude & Thrust Telemetry (launches on start)", pad.l + pw / 2, pad.t + ph / 2);
+    return;
+  }
+
+  const n = gAlt.length;
+  function plotSeries(arr, minV, maxV, color, dashed) {
+    gctx.save();
+    gctx.beginPath();
+    gctx.strokeStyle = color;
+    gctx.lineWidth = 1.8;
+    if (dashed) gctx.setLineDash([5, 3]);
+    for (let i = 0; i < n; i++) {
+      const x = pad.l + (i / (n - 1)) * pw;
+      const clamped = Math.max(minV, Math.min(maxV, arr[i]));
+      const y = pad.t + (1 - (clamped - minV) / (maxV - minV)) * ph;
+      if (i === 0) gctx.moveTo(x, y);
+      else gctx.lineTo(x, y);
+    }
+    gctx.stroke();
+    gctx.restore();
+  }
+
+  plotSeries(gSet, 0, WORLD_MAX_ALT, "#b91c1c", true);
+  plotSeries(gThrust, 0, MAX_THRUST, "rgba(15, 41, 66, 0.45)", false);
+  plotSeries(gAlt, 0, WORLD_MAX_ALT, "#1d4ed8", false);
+
+  // Time axis label
+  gctx.fillStyle = "#64748b";
+  gctx.textAlign = "center";
+  gctx.fillText(`Time: ${gTime[0].toFixed(1)}s — ${gTime[n - 1].toFixed(1)}s`, pad.l + pw / 2, H - 4);
+}
+
+function simLoop(ts) {
+  if (lastFrameTs === null) lastFrameTs = ts;
+  const elapsed = Math.min(0.05, (ts - lastFrameTs) / 1000);
+  lastFrameTs = ts;
+  animClock += elapsed;
+
+  if (running && !paused && !crashed && !missionDone) {
+    accumulator += elapsed * simSpeed;
+    let guard = 0;
+    while (accumulator >= FIXED_DT && guard < 12) {
+      stepPhysics(FIXED_DT);
+      accumulator -= FIXED_DT;
+      guard++;
+      if (crashed || missionDone) break;
+    }
+  }
+
+  drawScene();
+  drawGraph();
+  rafId = requestAnimationFrame(simLoop);
+}
+
+function startSimulationLoop() {
+  if (rafId !== null) return;
+  lastFrameTs = null;
+  accumulator = 0;
+  rafId = requestAnimationFrame(simLoop);
+}
+
+function stopSimulationLoop() {
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+}
+
+window.addEventListener("resize", () => {
+  if (currentPhase === 4) {
+    drawScene();
+    drawGraph();
+  }
+});
+
+// ── PHASE 6: LAB REPORT & C++ FIRMWARE EXPORT ──────────────────────────────
+function generateCppFirmware(gains) {
+  return `// ============================================================================
+// CHANAKYA UNIVERSITY — CONTROL ENGINEERING LAB
+// Autonomous Quadcopter Outer-Loop Altitude PID Firmware (C++ / Arduino)
+// Student: ${currentStudent.name} (${currentStudent.rollNo} | ${currentStudent.email || ""})
+// Physical Model: m = 1.50 kg, W = 14.72 N, T_max = 30.00 N
+// ============================================================================
+
+#include <Arduino.h>
+#include <Servo.h>
+
+Servo landingGearServo;
+
+// Verified PID Gains from Milestone 4 (>= 80/100)
+const float Kp = ${gains.kp.toFixed(2)}f; // N/m
+const float Ki = ${gains.ki.toFixed(2)}f; // N/(m*s)
+const float Kd = ${gains.kd.toFixed(2)}f; // N*s/m
+
+// Mission Setpoints (Meters): 50m -> 40m -> 30m -> 20m [Gear] -> 0m (Direct Descent)
+const float SETPOINTS[] = {50.0f, 40.0f, 30.0f, 20.0f, 0.0f};
+const int NUM_STAGES = 5;
+const float HOLD_DURATION = 10.0f;
+
+int currentStage = 0;
+float integralTerm = 0.0f;
+float holdTimer = 0.0f;
+bool gearDeployed = false;
+bool missionComplete = false;
+
+// Outer-loop Vertical Thrust Controller (Runs at 50-60 Hz)
+float computeVerticalThrust(float altitude, float velocity, float dt) {
+  if (missionComplete) return 0.0f;
+
+  float target = SETPOINTS[currentStage];
+  float error = target - altitude;
+
+  // Anti-windup integral clamping
+  integralTerm = constrain(integralTerm + error * dt, -45.0f, 45.0f);
+
+  float P = Kp * error;
+  float I = Ki * integralTerm;
+  float D = -Kd * velocity; // Derivative-on-measurement
+
+  float thrustN = constrain(P + I + D, 0.0f, 30.0f);
+
+  // Deploy landing gear at 20m milestone
+  if (currentStage >= 3 && !gearDeployed && altitude <= 21.5f) {
+    landingGearServo.write(90);
+    gearDeployed = true;
+  }
+
+  // Stage progression logic
+  if (currentStage < NUM_STAGES - 1) {
+    if (abs(error) <= 1.2f && abs(velocity) <= 0.8f) {
+      holdTimer += dt;
+      if (holdTimer >= HOLD_DURATION) {
+        currentStage++;
+        holdTimer = 0.0f;
+      }
+    }
+  } else {
+    if (altitude <= 0.15f && abs(velocity) <= 0.60f) {
+      missionComplete = true;
+    }
+  }
+  return thrustN;
+}`;
+}
+
+function renderLabReportAndCpp() {
+  if (!currentStudent) return;
+  document.getElementById("rptName").textContent = currentStudent.name || "—";
+  document.getElementById("rptRoll").textContent = currentStudent.rollNo;
+  document.getElementById("rptEmail").textContent = currentStudent.email || "—";
+  document.getElementById("rptQuizScore").textContent = `${currentStudent.quizBestScore || 0} / 6`;
+  document.getElementById("rptTimestamp").textContent = new Date().toLocaleString();
+
+  let scoreSum = 0;
+  const rows = MILESTONE_CONFIGS.map(cfg => {
+    const ms = currentStudent.milestones[cfg.id];
+    scoreSum += ms.bestScore || 0;
+    const gainsStr = ms.bestGains
+      ? `${ms.bestGains.kp.toFixed(2)}, ${ms.bestGains.ki.toFixed(2)}, ${ms.bestGains.kd.toFixed(2)}`
+      : "—";
+    const statusBadge = ms.passed
+      ? `<span class="text-[#15803d] font-bold">PASSED</span>`
+      : `<span class="text-slate-500">PENDING</span>`;
+    return `
+      <tr>
+        <td class="py-2.5 px-3 font-sans font-semibold text-[#0f2942]">${escapeHTML(cfg.shortTitle)}</td>
+        <td class="py-2.5 px-3">&ge; ${cfg.passCutoff}</td>
+        <td class="py-2.5 px-3">${statusBadge}</td>
+        <td class="py-2.5 px-3 font-bold">${ms.bestScore || 0} / 100</td>
+        <td class="py-2.5 px-3">${gainsStr}</td>
+        <td class="py-2.5 px-3">${ms.attempts || 0}</td>
+      </tr>
+    `;
+  }).join("");
+
+  document.getElementById("rptMilestonesTableBody").innerHTML = rows;
+  document.getElementById("rptOverallGrade").textContent = `${(scoreSum / 4).toFixed(1)} / 100`;
+
+  const m4 = currentStudent.milestones[4];
+  const unlocked = m4 && m4.passed && m4.bestGains && currentStudent.quizPassed;
+  document.getElementById("cppLockedNotice").classList.toggle("hidden", !!unlocked);
+  document.getElementById("cppCodeWrapper").classList.toggle("hidden", !unlocked);
+  document.getElementById("cppExportActions").classList.toggle("hidden", !unlocked);
+  if (unlocked) {
+    document.getElementById("cppCodePreview").textContent = generateCppFirmware(m4.bestGains);
+  }
+}
+
+window.copyCppCode = function() {
+  const code = document.getElementById("cppCodePreview").textContent;
+  const ta = document.createElement("textarea");
+  ta.value = code;
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
+  const btn = document.getElementById("btnCopyCpp");
+  btn.textContent = "Copied!";
+  setTimeout(() => { btn.textContent = "Copy C++ Code"; }, 1800);
+};
+
+window.downloadCppCode = function() {
+  const code = document.getElementById("cppCodePreview").textContent;
+  const blob = new Blob([code], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${currentStudent.rollNo}_Drone_PID_Controller.ino`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+window.downloadStandaloneReport = function() {
+  const area = document.getElementById("printableReportArea").innerHTML;
+  const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>PID Lab Report — ${escapeHTML(currentStudent.rollNo)}</title>
+  <script src="https://cdn.tailwindcss.com"><\/script></head><body class="p-8 bg-white text-[#0f2942] font-sans">${area}</body></html>`;
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${currentStudent.rollNo}_Control_Eng_PID_Report.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+// ── FACULTY PORTAL (ANALYTICS + ROSTER MANAGER) ────────────────────────────
+window.openFacultyPinModal = function() {
+  document.getElementById("facultyPinInput").value = "";
+  document.getElementById("facultyPinError").classList.add("hidden");
+  document.getElementById("facultyPinModal").classList.remove("hidden");
+  document.getElementById("facultyPinModal").classList.add("flex");
+  setTimeout(() => document.getElementById("facultyPinInput").focus(), 50);
+};
+
+window.closeFacultyPinModal = function() {
+  document.getElementById("facultyPinModal").classList.add("hidden");
+  document.getElementById("facultyPinModal").classList.remove("flex");
+};
+
+window.verifyFacultyPin = function(e) {
+  e.preventDefault();
+  const pin = document.getElementById("facultyPinInput").value.trim();
+  if (pin !== FACULTY_PIN) {
+    document.getElementById("facultyPinError").classList.remove("hidden");
+    return;
+  }
+  closeFacultyPinModal();
+  enterFacultyPortal();
+};
+
+function enterFacultyPortal() {
+  stopSimulationLoop();
+  document.getElementById("mainHeader").classList.add("hidden");
+  showOnlyView("facultyView");
+  switchFacultyTab("analytics");
+
+  if (firebaseReady && db) {
+    if (unsubAnalytics) unsubAnalytics();
+    if (unsubRoster) unsubRoster();
+    unsubAnalytics = onSnapshot(getAnalyticsCol(), snap => {
+      studentAnalyticsCache = [];
+      snap.forEach(d => studentAnalyticsCache.push(d.data()));
+      saveLocalCaches();
+      renderFacultyKPIsAndTable();
+    });
+    unsubRoster = onSnapshot(getRosterCol(), snap => {
+      authorizedRosterCache = [];
+      snap.forEach(d => authorizedRosterCache.push(d.data()));
+      saveLocalCaches();
+      renderFacultyKPIsAndTable();
+      renderRosterTable();
+    });
+  }
+  renderFacultyKPIsAndTable();
+  renderRosterTable();
+}
+
+window.exitFacultyPortal = function() {
+  if (unsubAnalytics) { unsubAnalytics(); unsubAnalytics = null; }
+  if (unsubRoster) { unsubRoster(); unsubRoster = null; }
+  showOnlyView("phase1View");
+};
+
+window.switchFacultyTab = function(tab) {
+  const isAnalytics = tab === "analytics";
+  document.getElementById("facultyAnalyticsTab").classList.toggle("hidden", !isAnalytics);
+  document.getElementById("facultyRosterTab").classList.toggle("hidden", isAnalytics);
+  document.getElementById("facTabAnalytics").className = isAnalytics
+    ? "px-4 py-2 rounded-lg text-xs font-bold bg-[#0f2942] text-white transition"
+    : "px-4 py-2 rounded-lg text-xs font-bold bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 transition";
+  document.getElementById("facTabRoster").className = !isAnalytics
+    ? "px-4 py-2 rounded-lg text-xs font-bold bg-[#0f2942] text-white transition"
+    : "px-4 py-2 rounded-lg text-xs font-bold bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 transition";
+};
+
+function renderFacultyKPIsAndTable() {
+  const totalAuth = authorizedRosterCache.length;
+  const activeCount = studentAnalyticsCache.length;
+  const quizPassed = studentAnalyticsCache.filter(s => s.quizPassed).length;
+  const m4Done = studentAnalyticsCache.filter(s => s.milestones && s.milestones[4] && s.milestones[4].passed).length;
+
+  let avgSum = 0;
+  studentAnalyticsCache.forEach(s => {
+    const m = s.milestones || {};
+    avgSum += ((m[1]?.bestScore || 0) + (m[2]?.bestScore || 0) + (m[3]?.bestScore || 0) + (m[4]?.bestScore || 0)) / 4;
+  });
+  const classAvg = activeCount > 0 ? (avgSum / activeCount).toFixed(1) : "0.0";
+
+  document.getElementById("kpiAuthorized").textContent = totalAuth;
+  document.getElementById("kpiActive").textContent = activeCount;
+  document.getElementById("kpiQuizPassed").textContent = quizPassed;
+  document.getElementById("kpiM4Done").textContent = m4Done;
+  document.getElementById("kpiAvgScore").textContent = classAvg;
+
+  renderFacultyAnalyticsTable();
+}
+
+window.renderFacultyAnalyticsTable = function() {
+  const query = (document.getElementById("facultySearchInput").value || "").trim().toLowerCase();
+  const filter = document.getElementById("facultyStatusFilter").value;
+  const tbody = document.getElementById("facultyTableBody");
+
+  const filtered = studentAnalyticsCache.filter(s => {
+    const matchText = !query ||
+      (s.rollNo || "").toLowerCase().includes(query) ||
+      (s.name || "").toLowerCase().includes(query) ||
+      (s.email || "").toLowerCase().includes(query);
+    if (!matchText) return false;
+    const m4Passed = !!(s.milestones?.[4]?.passed);
+    if (filter === "COMPLETED") return m4Passed && !!s.quizPassed;
+    if (filter === "QUIZ_PENDING") return m4Passed && !s.quizPassed;
+    if (filter === "IN_FLIGHT") return !m4Passed;
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="11" class="py-8 text-center text-slate-500">No matching student records found.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(s => {
+    const m = s.milestones || {};
+    const totalTrials = (m[1]?.attempts || 0) + (m[2]?.attempts || 0) + (m[3]?.attempts || 0) + (m[4]?.attempts || 0);
+    const bestG = m[4]?.bestGains || m[3]?.bestGains || m[2]?.bestGains || m[1]?.bestGains;
+    const gainStr = bestG ? `${bestG.kp.toFixed(2)} / ${bestG.ki.toFixed(2)} / ${bestG.kd.toFixed(2)}` : "—";
+    const m4Passed = !!(m[4]?.passed);
+    const statusText = (m4Passed && s.quizPassed) ? "Certified" : m4Passed ? "Quiz Pending" : "In Flight";
+    const statusCls = (m4Passed && s.quizPassed)
+      ? "text-[#15803d] bg-green-50 border-green-200"
+      : m4Passed
+        ? "text-[#1d4ed8] bg-blue-50 border-blue-200"
+        : "text-slate-600 bg-slate-100 border-slate-200";
+    const lastStr = s.lastActive ? new Date(s.lastActive).toLocaleDateString() : "—";
+
+    const fmtM = (id) => {
+      const rec = m[id];
+      if (!rec || !rec.attempts) return `<span class="text-slate-400">—</span>`;
+      return `<span class="mono font-bold ${rec.passed ? "text-[#15803d]" : "text-[#b91c1c]"}">${rec.bestScore}</span>`;
+    };
+
+    return `
+      <tr onclick="openStudentDrillModal('${escapeHTML(s.rollNo)}')" class="hover:bg-slate-50 cursor-pointer transition">
+        <td class="py-3 px-4 mono font-bold text-[#0f2942]">${escapeHTML(s.rollNo)}</td>
+        <td class="py-3 px-4">
+          <div class="font-semibold text-[#0f2942]">${escapeHTML(s.name || "—")}</div>
+          <div class="text-[10px] text-slate-500 mono">${escapeHTML(s.email || "")}</div>
+        </td>
+        <td class="py-3 px-3 text-center">${fmtM(1)}</td>
+        <td class="py-3 px-3 text-center">${fmtM(2)}</td>
+        <td class="py-3 px-3 text-center">${fmtM(3)}</td>
+        <td class="py-3 px-3 text-center">${fmtM(4)}</td>
+        <td class="py-3 px-3 text-center mono">${s.quizBestScore || 0}/6 (${s.quizAttempts || 0})</td>
+        <td class="py-3 px-3 text-center mono">${totalTrials}</td>
+        <td class="py-3 px-4 mono text-slate-700">${gainStr}</td>
+        <td class="py-3 px-3"><span class="px-2 py-0.5 rounded border text-[10px] font-bold ${statusCls}">${statusText}</span></td>
+        <td class="py-3 px-4 text-right text-slate-500 mono">${lastStr}</td>
+      </tr>
+    `;
+  }).join("");
+};
+
+window.openStudentDrillModal = function(rollNo) {
+  const s = studentAnalyticsCache.find(st => st.rollNo === rollNo);
+  if (!s) return;
+  document.getElementById("drillRoll").textContent = s.rollNo;
+  document.getElementById("drillName").textContent = s.name || s.email || s.rollNo;
+  document.getElementById("drillMeta").textContent = `${s.email || ""} • Quiz: ${s.quizBestScore || 0}/6 (${s.quizAttempts || 0} attempts) • Last Active: ${new Date(s.lastActive).toLocaleString()}`;
+
+  const m = s.milestones || {};
+  const passedCount = [1, 2, 3, 4].filter(id => m[id]?.passed).length;
+  const totalTrials = [1, 2, 3, 4].reduce((acc, id) => acc + (m[id]?.attempts || 0), 0);
+  document.getElementById("drillSummaryText").textContent =
+    `${s.name || s.rollNo} has completed ${passedCount} of 4 flight milestones across ${totalTrials} recorded trial(s) and ${s.quizPassed ? "passed" : "not yet passed"} the post-simulation certification quiz (${s.quizBestScore || 0}/6).`;
+
+  document.getElementById("drillMilestoneBars").innerHTML = MILESTONE_CONFIGS.map(cfg => {
+    const rec = m[cfg.id] || { bestScore: 0, passed: false };
+    const pct = Math.min(100, rec.bestScore || 0);
+    return `
+      <div class="space-y-1">
+        <div class="flex justify-between text-xs">
+          <span class="font-semibold text-[#0f2942]">${cfg.shortTitle} (Cutoff &ge; ${cfg.passCutoff})</span>
+          <span class="mono font-bold ${rec.passed ? "text-[#15803d]" : "text-slate-600"}">${rec.bestScore || 0} / 100</span>
+        </div>
+        <div class="relative h-3 bg-white border border-slate-200 rounded-full overflow-hidden">
+          <div class="h-full ${rec.passed ? "bg-[#15803d]" : "bg-[#1d4ed8]"}" style="width:${pct}%"></div>
+          <div class="absolute top-0 bottom-0 w-0.5 bg-[#b91c1c]" style="left:${cfg.passCutoff}%"></div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  const trials = s.trials || [];
+  document.getElementById("drillTrialsBody").innerHTML = trials.length === 0
+    ? `<tr><td colspan="8" class="py-4 text-center text-slate-500">No flight trials recorded yet.</td></tr>`
+    : trials.map(t => `
+      <tr>
+        <td class="py-2 px-3">${escapeHTML(t.time)}</td>
+        <td class="py-2 px-3 font-bold">M${t.milestone}</td>
+        <td class="py-2 px-3 font-bold">${t.score}/100</td>
+        <td class="py-2 px-3 ${t.passed ? "text-[#15803d]" : "text-[#b91c1c]"} font-bold">${t.passed ? "PASS" : t.crashed ? "CRASH" : "FAIL"}</td>
+        <td class="py-2 px-3">${t.kp} / ${t.ki} / ${t.kd}</td>
+        <td class="py-2 px-3">${t.overshoot} m</td>
+        <td class="py-2 px-3">${t.sse} m</td>
+        <td class="py-2 px-3">${t.touchdown !== null ? t.touchdown + " m/s" : "—"}</td>
+      </tr>
+    `).join("");
+
+  document.getElementById("studentDetailModal").classList.remove("hidden");
+  document.getElementById("studentDetailModal").classList.add("flex");
+};
+
+window.closeStudentDrillModal = function() {
+  document.getElementById("studentDetailModal").classList.add("hidden");
+  document.getElementById("studentDetailModal").classList.remove("flex");
+};
+
+// ── ROSTER MANAGEMENT ──────────────────────────────────────────────────────
+function renderRosterTable() {
+  const tbody = document.getElementById("rosterTableBody");
+  document.getElementById("rosterCountBadge").textContent = `${authorizedRosterCache.length} Students`;
+  if (authorizedRosterCache.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="3" class="py-6 text-center text-slate-500">Roster is empty. Add students using the form or CSV import on the left.</td></tr>`;
+    return;
+  }
+  const sorted = [...authorizedRosterCache].sort((a, b) => a.rollNo.localeCompare(b.rollNo));
+  tbody.innerHTML = sorted.map(r => `
+    <tr>
+      <td class="py-2.5 px-4 mono font-bold text-[#0f2942]">${escapeHTML(r.rollNo)}</td>
+      <td class="py-2.5 px-4 mono text-slate-700">${escapeHTML(r.email || "")}</td>
+      <td class="py-2.5 px-4 text-right">
+        <button onclick="removeRosterStudent('${escapeHTML(r.rollNo)}')" class="text-[11px] font-semibold text-[#b91c1c] hover:underline">Remove</button>
+      </td>
+    </tr>
+  `).join("");
+}
+
+window.addSingleRosterStudent = async function(e) {
+  e.preventDefault();
+  const roll = document.getElementById("rosterAddRoll").value.trim().toUpperCase();
+  const email = document.getElementById("rosterAddEmail").value.trim().toLowerCase();
+  if (!roll || !email) return;
+
+  const rid = normalizeRollId(roll);
+  const idx = authorizedRosterCache.findIndex(r => normalizeRollId(r.rollNo) === rid);
+  if (idx >= 0) authorizedRosterCache[idx] = { rollNo: roll, email };
+  else authorizedRosterCache.push({ rollNo: roll, email });
+  saveLocalCaches();
+
+  if (firebaseReady && db) {
+    try { await setDoc(getRosterDoc(rid), { rollNo: roll, email }); } catch (err) { console.warn(err); }
+  }
+  document.getElementById("rosterAddRoll").value = "";
+  document.getElementById("rosterAddEmail").value = "";
+  renderRosterTable();
+  renderFacultyKPIsAndTable();
+};
+
+window.removeRosterStudent = async function(rollNo) {
+  const rid = normalizeRollId(rollNo);
+  authorizedRosterCache = authorizedRosterCache.filter(r => normalizeRollId(r.rollNo) !== rid);
+  saveLocalCaches();
+  if (firebaseReady && db) {
+    try { await deleteDoc(getRosterDoc(rid)); } catch (err) { console.warn(err); }
+  }
+  renderRosterTable();
+  renderFacultyKPIsAndTable();
+};
+
+window.bulkImportRoster = async function() {
+  const raw = document.getElementById("rosterBulkTextarea").value.trim();
+  const msgEl = document.getElementById("rosterImportMsg");
+  if (!raw) return;
+
+  const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  let count = 0;
+  for (const line of lines) {
+    const parts = line.split(",");
+    if (parts.length < 2) continue;
+    const roll = parts[0].trim().toUpperCase();
+    const email = parts[1].trim().toLowerCase();
+    if (!roll || !email) continue;
+    const rid = normalizeRollId(roll);
+    const idx = authorizedRosterCache.findIndex(r => normalizeRollId(r.rollNo) === rid);
+    if (idx >= 0) authorizedRosterCache[idx] = { rollNo: roll, email };
+    else authorizedRosterCache.push({ rollNo: roll, email });
+    if (firebaseReady && db) {
+      try { await setDoc(getRosterDoc(rid), { rollNo: roll, email }); } catch (err) { console.warn(err); }
+    }
+    count++;
+  }
+  saveLocalCaches();
+  document.getElementById("rosterBulkTextarea").value = "";
+  msgEl.textContent = `Successfully imported ${count} student(s) into the authorized roster.`;
+  msgEl.className = "text-xs font-medium p-2 rounded-lg bg-green-50 border border-green-200 text-[#15803d]";
+  msgEl.classList.remove("hidden");
+  renderRosterTable();
+  renderFacultyKPIsAndTable();
+};
+
+window.exportClassCSV = function() {
+  const headers = ["RollNo", "Name", "RegisteredEmail", "M1_Best", "M2_Best", "M3_Best", "M4_Best", "M4_Passed", "QuizScore", "QuizAttempts", "LastActive"];
+  const rows = studentAnalyticsCache.map(s => [
+    s.rollNo,
+    `"${(s.name || "").replace(/"/g, '""')}"`,
+    s.email || "",
+    s.milestones?.[1]?.bestScore || 0,
+    s.milestones?.[2]?.bestScore || 0,
+    s.milestones?.[3]?.bestScore || 0,
+    s.milestones?.[4]?.bestScore || 0,
+    s.milestones?.[4]?.passed ? "YES" : "NO",
+    s.quizBestScore || 0,
+    s.quizAttempts || 0,
+    s.lastActive || ""
+  ].join(","));
+  const csv = [headers.join(","), ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "Chanakya_Control_Eng_PID_Analytics.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+// ── INITIALIZE APP ─────────────────────────────────────────────────────────
+window.addEventListener("load", () => {
+  initCloudBackend();
+  syncGainInputs("sl");
+});
+</script>
+</body>
+</html>
