@@ -1326,11 +1326,33 @@ const AIR_DRAG_C = 0.15;                     // N*s/m
 const WORLD_MAX_ALT = 62;                    // m
 const FIXED_DT = 1 / 60;                     // 60 Hz physics step
 const GRAPH_MAX_PTS = 1200;                  // 20 s rolling window
+const HOLD_BAND_M = 1.2;                     // +/- 1.2 m stability band
 
 const LS_ROSTER_KEY = "cu_pid_authorized_roster_v3";
 const LS_ANALYTICS_KEY = "cu_pid_student_analytics_v3";
 
 const SEED_ROSTER = [];
+
+// ── LOCAL STORAGE HELPERS ──────────────────────────────────────────────────
+function loadLocalJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return Array.isArray(fallback) ? [...fallback] : { ...fallback };
+    const parsed = JSON.parse(raw);
+    return parsed !== null && parsed !== undefined ? parsed : fallback;
+  } catch (e) {
+    return Array.isArray(fallback) ? [...fallback] : { ...fallback };
+  }
+}
+
+function saveLocalCaches() {
+  try {
+    localStorage.setItem(LS_ROSTER_KEY, JSON.stringify(authorizedRosterCache));
+    localStorage.setItem(LS_ANALYTICS_KEY, JSON.stringify(studentAnalyticsCache));
+  } catch (e) {
+    console.warn("LocalStorage save skipped:", e);
+  }
+}
 
 // ── FIREBASE & STORAGE STATE ───────────────────────────────────────────────
 let db = null;
@@ -1340,81 +1362,59 @@ let unsubAnalytics = null;
 let unsubRoster = null;
 const appId = typeof __app_id !== "undefined" ? __app_id : "chanakya-control-eng-pid";
 
+// Chanakya University Production Firebase Configuration (chanakya-pid-drone-lab)
+const CHANAKYA_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCbOLXZVBdBi6ryO2Vrxz4lpmk2xmeIccI",
+  authDomain: "chanakya-pid-drone-lab.firebaseapp.com",
+  projectId: "chanakya-pid-drone-lab",
+  storageBucket: "chanakya-pid-drone-lab.firebasestorage.app",
+  messagingSenderId: "922734468357",
+  appId: "1:922734468357:web:255f27443350c258e42b6c",
+  measurementId: "G-007QW1Z5YJ"
+};
+
 let authorizedRosterCache = loadLocalJSON(LS_ROSTER_KEY, SEED_ROSTER);
 let studentAnalyticsCache = loadLocalJSON(LS_ANALYTICS_KEY, []);
-
-function loadLocalJSON(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return JSON.parse(JSON.stringify(fallback));
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : JSON.parse(JSON.stringify(fallback));
-  } catch {
-    return JSON.parse(JSON.stringify(fallback));
-  }
-}
-
-function saveLocalCaches() {
-  try {
-    localStorage.setItem(LS_ROSTER_KEY, JSON.stringify(authorizedRosterCache));
-    localStorage.setItem(LS_ANALYTICS_KEY, JSON.stringify(studentAnalyticsCache));
-  } catch (e) {
-    console.warn("LocalStorage save warning:", e);
-  }
-}
 
 function getRosterCol() {
   return collection(db, "artifacts", appId, "public", "data", "authorized_roster");
 }
-function getRosterDoc(rollId) {
-  return doc(db, "artifacts", appId, "public", "data", "authorized_roster", rollId);
-}
+
 function getAnalyticsCol() {
   return collection(db, "artifacts", appId, "public", "data", "student_analytics");
 }
-function getAnalyticsDoc(rollId) {
-  return doc(db, "artifacts", appId, "public", "data", "student_analytics", rollId);
-}
 
-function normalizeRollId(roll) {
-  return roll.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "_");
-}
-function normalizeEmail(email) {
-  return email.trim().toLowerCase();
-}
-function escapeHTML(str) {
-  return String(str).replace(/[&<>"']/g, m => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-  }[m]));
-}
-
-function setSyncIndicators(text, online) {
-  const dotCls = online ? "w-2 h-2 rounded-full bg-[#15803d]" : "w-2 h-2 rounded-full bg-slate-400";
+function setSyncIndicators(label, isConnected) {
+  const dotCls = isConnected ? "w-2 h-2 rounded-full bg-emerald-500" : "w-2 h-2 rounded-full bg-amber-500";
   const lDot = document.getElementById("loginSyncDot");
   const lTxt = document.getElementById("loginSyncText");
   const hDot = document.getElementById("headerSyncDot");
   const hTxt = document.getElementById("headerSyncText");
   if (lDot) lDot.className = dotCls;
-  if (lTxt) lTxt.textContent = text;
+  if (lTxt) lTxt.textContent = label;
   if (hDot) hDot.className = dotCls;
-  if (hTxt) hTxt.textContent = text;
+  if (hTxt) hTxt.textContent = label;
 }
 
 async function initCloudBackend() {
   try {
-    if (typeof __firebase_config === "undefined" || !__firebase_config) {
+    const useCustomProject = !!(CHANAKYA_FIREBASE_CONFIG && CHANAKYA_FIREBASE_CONFIG.apiKey);
+    const firebaseConfig = useCustomProject
+      ? CHANAKYA_FIREBASE_CONFIG
+      : (typeof __firebase_config !== "undefined" && __firebase_config
+          ? (typeof __firebase_config === "string" ? JSON.parse(__firebase_config) : __firebase_config)
+          : null);
+
+    if (!firebaseConfig) {
       setSyncIndicators("Local Browser Storage Mode", true);
       return;
     }
-    const firebaseConfig = typeof __firebase_config === "string"
-      ? JSON.parse(__firebase_config)
-      : __firebase_config;
 
     const app = initializeApp(firebaseConfig);
     auth = getAuth(app);
     db = getFirestore(app);
 
-    if (typeof __initial_auth_token !== "undefined" && __initial_auth_token) {
+    if (!useCustomProject && typeof __initial_auth_token !== "undefined" && __initial_auth_token) {
       await signInWithCustomToken(auth, __initial_auth_token);
     } else {
       await signInAnonymously(auth);
@@ -1423,1493 +1423,1417 @@ async function initCloudBackend() {
     firebaseReady = true;
 
     const rosterSnap = await getDocs(getRosterCol());
-    if (!rosterSnap.empty) {
-      authorizedRosterCache = [];
-      rosterSnap.forEach(d => authorizedRosterCache.push(d.data()));
-    }
+    authorizedRosterCache = [];
+    rosterSnap.forEach(d => authorizedRosterCache.push(d.data()));
     saveLocalCaches();
     setSyncIndicators("Course Database Connected", true);
   } catch (err) {
     console.warn("Cloud init fallback to local storage:", err);
-    setSyncIndicators("Local Browser Storage Mode", true);
+    setSyncIndicators("Database Error — Check Auth/Rules", false);
   }
 }
 
-// ── 6-QUESTION CERTIFICATION QUIZ (Balanced Keys: D, A, C, B, A, D) ────────
+// ── QUIZ & MILESTONE DEFINITIONS ───────────────────────────────────────────
+// Balanced Answer Key: D (3), A (0), C (2), B (1), A (0), D (3)
 const QUIZ_QUESTIONS = [
   {
-    q: "1. For our assumed drone mass of m = 1.50 kg (g = 9.81 m/s²), what steady vertical thrust T_total is required to hover motionless at 50 m in calm air?",
+    q: "1. For our 1.50 kg quadcopter (g = 9.81 m/s²), what total upward vertical thrust T_total is required to maintain a steady hover with zero vertical acceleration (ignoring wind)?",
     options: [
-      "A) 0.00 N because velocity and acceleration are both zero at hover",
-      "B) 9.81 N equal to the gravitational acceleration constant",
-      "C) 30.00 N equal to the maximum available rotor thrust",
-      "D) 14.72 N equal to the drone's gravitational weight W = m · g"
+      "A) 0.00 N — motors can idle once altitude is reached",
+      "B) 9.81 N — equal to gravitational acceleration alone",
+      "C) 30.00 N — full maximum thrust is always required",
+      "D) 14.72 N — equal to the drone's weight W = m·g"
     ],
     correct: 3,
-    explanation: "Correct (D). By Newton's 2nd Law (m·a_z = T − mg), hovering (a_z = 0, v_z = 0) requires T_total = m·g = 1.50 × 9.81 = 14.72 N."
+    explanation: "By Newton's 2nd Law (m·a_z = T_total - m·g), hovering requires a_z = 0, so T_total = m·g = 1.50 × 9.81 = 14.715 N (≈ 14.72 N)."
   },
   {
-    q: "2. Using the 2nd-order closed-loop characteristic equation s² + (Kd/m)s + (Kp/m) = s² + 2ζω_n·s + ω_n², what are Kp and Kd for m = 1.50 kg, natural frequency ω_n = 2.0 rad/s, and critical damping ζ = 1.0?",
+    q: "2. Using the second-order closed-loop model s² + (Kd/m)s + (Kp/m) = s² + 2ζω_n·s + ω_n², what proportional gain Kp is needed for m = 1.50 kg to achieve natural frequency ω_n = 2.0 rad/s?",
     options: [
-      "A) Kp = 6.00 N/m and Kd = 6.00 N·s/m",
-      "B) Kp = 3.00 N/m and Kd = 1.50 N·s/m",
-      "C) Kp = 1.50 N/m and Kd = 9.81 N·s/m",
-      "D) Kp = 14.72 N/m and Kd = 0.00 N·s/m"
+      "A) Kp = m · ω_n² = 1.50 × 4.0 = 6.00 N/m",
+      "B) Kp = m · ω_n = 1.50 × 2.0 = 3.00 N/m",
+      "C) Kp = ω_n² / m = 4.0 / 1.50 = 2.67 N/m",
+      "D) Kp = 2 · m · ω_n = 6.00 N·s/m"
     ],
     correct: 0,
-    explanation: "Correct (A). Kp = m·ω_n² = 1.50 × 2.0² = 6.00 N/m, and Kd = 2·ζ·ω_n·m = 2 × 1.0 × 2.0 × 1.50 = 6.00 N·s/m."
+    explanation: "Comparing coefficients gives Kp / m = ω_n², therefore Kp = m · ω_n² = 1.50 × (2.0)² = 6.00 N/m."
   },
   {
-    q: "3. When gravity feedforward is OFF (Milestone 2), a PD-only controller (Ki = 0) settles below 50.0 m. How does adding the Integral term (Ki) eliminate this steady-state droop?",
+    q: "3. Once Kp is chosen, how do you calculate the derivative gain Kd for critical damping (ζ = 1.0) so the drone reaches its target altitude without overshoot?",
     options: [
-      "A) It increases the drone's maximum thrust limit above 30.00 N",
-      "B) It multiplies vertical velocity to brake the drone faster",
-      "C) It integrates persistent altitude error over time until I_term builds up to 14.72 N, balancing gravity at zero error",
-      "D) It disables gravitational acceleration once the drone crosses 45 m"
+      "A) Kd = Kp / (2 · m)",
+      "B) Kd = m · g / Kp",
+      "C) Kd = 2 · ζ · √(m · Kp) = 2 · √(1.50 · Kp)",
+      "D) Kd = 0, because air drag alone provides critical damping"
     ],
     correct: 2,
-    explanation: "Correct (C). The Integral term accumulates error over time so that even when e(t) reaches 0 at 50.0 m, I_term holds the steady 14.72 N thrust needed to cancel weight."
+    explanation: "From Kd/m = 2ζω_n and ω_n = √(Kp/m), we obtain Kd = 2·ζ·√(m·Kp). Setting ζ = 1.0 gives critical damping."
   },
   {
-    q: "4. During a rapid climb from 0 m to 50 m, the drone shoots past 50 m to 59 m and oscillates repeatedly. Which adjustment directly increases damping ratio ζ to suppress overshoot?",
+    q: "4. When gravity feedforward is turned OFF (Milestones 2–4), why does a pure PD controller (Ki = 0) hover permanently below the 50 m setpoint?",
     options: [
-      "A) Set Kd = 0.00 N·s/m and double Kp",
-      "B) Increase the Derivative gain Kd (since ζ = Kd / (2·√(m·Kp)))",
-      "C) Increase Ki above the Routh-Hurwitz limit Kp·Kd/m",
-      "D) Reduce the landing gear deployment altitude to 5 m"
+      "A) The barometer sensor drifts linearly with time",
+      "B) A non-zero steady-state error e = W / Kp is required for the P-term to generate the 14.72 N hover weight",
+      "C) The D-term pushes the drone downward during steady hover",
+      "D) Maximum thrust is limited to 10 N in Milestones 2–4"
     ],
     correct: 1,
-    explanation: "Correct (B). Increasing Kd directly raises damping ratio ζ, applying braking thrust proportional to −v_z before the drone overshoots the setpoint."
+    explanation: "At hover (v_z = 0, D = 0), if Ki = 0 then T = Kp·e must equal 14.72 N, forcing a steady-state droop of e = 14.72 / Kp meters. Adding Ki eliminates this droop."
   },
   {
-    q: "5. Why is it impossible to fly a real 6-DOF quadcopter using ONLY a 1-DOF vertical lift PID controller?",
+    q: "5. According to the Routh-Hurwitz stability criterion for this 3rd-order PID vertical loop, what happens if Ki is tuned too high (Ki ≥ Kp · Kd / m)?",
     options: [
-      "A) Without a fast inner attitude loop (400–1000 Hz) holding Roll φ ≈ 0 and Pitch θ ≈ 0, slight imbalances tilt the thrust vector (T_z = T·cos φ·cos θ) and flip the drone in < 0.2 s",
-      "B) Because Newton's Second Law does not apply to vertical thrust outdoors",
-      "C) Because LiDAR sensors cannot measure altitude below 50 meters",
-      "D) Because real quadcopters do not use PID controllers for altitude"
+      "A) Poles cross into the right-half s-plane, causing growing oscillations and closed-loop instability",
+      "B) The drone settles instantaneously with zero overshoot",
+      "C) Steady-state error increases to infinity",
+      "D) The landing gear fails to deploy at 20 meters"
     ],
     correct: 0,
-    explanation: "Correct (A). Real quadcopters require a cascaded architecture: a fast inner loop keeps Roll & Pitch near zero so the slower outer altitude PID can safely control vertical lift."
+    explanation: "For s³ + (Kd/m)s² + (Kp/m)s + (Ki/m) = 0, Routh-Hurwitz requires Ki < (Kp·Kd)/m. Exceeding this causes right-half-plane poles and unstable oscillations."
   },
   {
-    q: "6. According to the Routh-Hurwitz stability criterion for a 3rd-order PID-controlled mass (Ki < Kp·Kd/m), what happens if Ki is chosen excessively high?",
+    q: "6. Why can a real physical quadcopter NOT fly using only this 1-DOF vertical altitude PID loop without an inner attitude controller?",
     options: [
-      "A) The drone climbs infinitely fast with zero overshoot",
-      "B) The drone's physical weight drops below 14.72 N",
-      "C) The Derivative term automatically cancels the Integral term",
-      "D) Integral windup and phase lag destabilize the closed loop, producing growing oscillations and potential crash"
+      "A) Real propellers cannot spin fast enough to lift 1.50 kg",
+      "B) Vertical thrust is independent of Roll (φ) and Pitch (θ) angles",
+      "C) LiDAR sensors only work in horizontal directions",
+      "D) Any tilt reduces vertical lift to T·cos(φ)·cos(θ) and causes lateral acceleration; a fast 400–1000 Hz inner Attitude PID loop is required to keep the airframe level"
     ],
     correct: 3,
-    explanation: "Correct (D). Exceeding the Routh-Hurwitz limit Ki < Kp·Kd/m introduces excessive phase lag and integral windup, destabilizing the closed-loop system."
+    explanation: "Real drones have 6-DOF dynamics. A fast inner attitude loop (400–1000 Hz) holds Roll φ ≈ 0 and Pitch θ ≈ 0 so the slower outer altitude PID loop can command pure vertical lift."
   }
 ];
 
-// ── 4 SEQUENTIAL MILESTONES (M1–M3 PASS >= 85, M4 PASS >= 80, COMPULSORY WIND) ──
 const MILESTONE_CONFIGS = [
   {
     id: 1,
-    shortTitle: "M1: Takeoff",
-    title: "Milestone 1: Takeoff & PD Critical Damping (0 m → 50 m)",
-    desc: "Ascend 0 m → 50 m and hold 5 s under compulsory ±2.5 N wind gusts. Gravity Feedforward (14.72 N) is ON.",
+    short: "M1",
+    title: "Milestone 1: Takeoff & PD Damping",
+    desc: "Launch from 0m to 50m and hold for 5s under compulsory wind gusts. Gravity feedforward is ON (14.72 N). Pass >= 85.",
     passCutoff: 85,
-    gravityFeedforward: true,
-    windForced: true,
+    feedforward: true,
     stages: [
-      { setpoint: 50, hover: 5, label: "Ascend 0m → 50m & Hold 5s", deployGear: false }
+      { setpoint: 50, hold: 5, label: "Climb & Hold 50m" }
     ]
   },
   {
     id: 2,
-    shortTitle: "M2: Gravity",
-    title: "Milestone 2: Uncompensated Gravity Hold (0 m → 50 m)",
-    desc: "Feedforward OFF (0 N) + compulsory ±2.5 N wind gusts. Tune Ki so I_term carries the full 14.72 N weight for 10 s.",
+    short: "M2",
+    title: "Milestone 2: Uncompensated Gravity",
+    desc: "Launch from 0m to 50m and hold for 10s under wind gusts. Feedforward is OFF — tune Ki to carry 14.72 N weight. Pass >= 85.",
     passCutoff: 85,
-    gravityFeedforward: false,
-    windForced: true,
+    feedforward: false,
     stages: [
-      { setpoint: 50, hover: 10, label: "Ascend 0m → 50m & Hold 10s", deployGear: false }
+      { setpoint: 50, hold: 10, label: "Hold 50m (No FF)" }
     ]
   },
   {
     id: 3,
-    shortTitle: "M3: Descent",
-    title: "Milestone 3: Step-Down Descent, Gear Deploy & Wind",
-    desc: "0m → 50m (10s) → 40m (10s) → 30m (10s) → 20m (Auto Gear + 10s) under compulsory ±2.5 N vertical wind gusts.",
+    short: "M3",
+    title: "Milestone 3: Step-Downs, Gear & Wind",
+    desc: "0m → 50m → 40m → 30m → 20m (Auto Gear Deploy + 10s hold) under compulsory ±2.5 N wind gusts. Pass >= 85.",
     passCutoff: 85,
-    gravityFeedforward: false,
-    windForced: true,
+    feedforward: false,
     stages: [
-      { setpoint: 50, hover: 10, label: "Hover 50m (10s)", deployGear: false },
-      { setpoint: 40, hover: 10, label: "Step-Down 40m (10s)", deployGear: false },
-      { setpoint: 30, hover: 10, label: "Step-Down 30m (10s)", deployGear: false },
-      { setpoint: 20, hover: 10, label: "Deploy Gear & Hold 20m (10s)", deployGear: true }
+      { setpoint: 50, hold: 10, label: "Hold 50m" },
+      { setpoint: 40, hold: 10, label: "Descend 40m" },
+      { setpoint: 30, hold: 10, label: "Descend 30m" },
+      { setpoint: 20, hold: 10, label: "Gear Deploy 20m", deployGear: true }
     ]
   },
   {
     id: 4,
-    shortTitle: "M4: Landing",
-    title: "Milestone 4: Full Mission & Direct 20m → 0m Touchdown",
-    desc: "50m → 40m → 30m → 20m [Gear+10s] → 0m direct descent & soft touchdown (≤ 0.6 m/s) in wind. Pass Cutoff: ≥ 80/100.",
+    short: "M4",
+    title: "Milestone 4: Full Autonomous Touchdown",
+    desc: "0m → 50m → 40m → 30m → 20m [Gear+10s] → 0m direct controlled descent & soft landing (<= 0.6 m/s). Pass >= 80.",
     passCutoff: 80,
-    gravityFeedforward: false,
-    windForced: true,
+    feedforward: false,
     stages: [
-      { setpoint: 50, hover: 10, label: "Hover 50m (10s)", deployGear: false },
-      { setpoint: 40, hover: 10, label: "Hover 40m (10s)", deployGear: false },
-      { setpoint: 30, hover: 10, label: "Hover 30m (10s)", deployGear: false },
-      { setpoint: 20, hover: 10, label: "Gear Deploy & Hold 20m (10s)", deployGear: true },
-      { setpoint: 0,  hover: 0,  label: "Direct Descent 20m → 0m (≤0.6 m/s)", deployGear: true }
+      { setpoint: 50, hold: 10, label: "Hold 50m" },
+      { setpoint: 40, hold: 10, label: "Descend 40m" },
+      { setpoint: 30, hold: 10, label: "Descend 30m" },
+      { setpoint: 20, hold: 10, label: "Gear Deploy 20m", deployGear: true },
+      { setpoint: 0,  hold: 0,  label: "Direct Touchdown 0m", isLanding: true }
     ]
   }
 ];
 
-// ── STUDENT SESSION RECORD ─────────────────────────────────────────────────
+// ── CURRENT STUDENT SESSION STATE ──────────────────────────────────────────
 let currentStudent = null;
 let currentPhase = 1;
-let activeMilestoneId = 1;
+let activeMilestoneIdx = 0; // 0..3
+let selectedQuizAnswers = new Array(QUIZ_QUESTIONS.length).fill(null);
 
-function createEmptyStudentRecord(rollNo, email, name) {
+function createDefaultStudentProfile(roll, email, name) {
   return {
-    rollNo: rollNo.toUpperCase(),
-    email: email.trim().toLowerCase(),
-    name: name.trim(),
-    theoryRead: { m1: false, m2: false, m3: false },
+    roll: roll.toUpperCase(),
+    email: email.toLowerCase(),
+    name: name,
+    theoryModules: { 1: false, 2: false, 3: false },
     quizPassed: false,
     quizBestScore: 0,
     quizAttempts: 0,
-    unlockedMilestone: 1,
     milestones: {
-      1: { passed: false, bestScore: 0, bestGains: null, attempts: 0 },
-      2: { passed: false, bestScore: 0, bestGains: null, attempts: 0 },
-      3: { passed: false, bestScore: 0, bestGains: null, attempts: 0 },
-      4: { passed: false, bestScore: 0, bestGains: null, attempts: 0 }
+      1: { passed: false, bestScore: 0, trials: 0, bestGains: null },
+      2: { passed: false, bestScore: 0, trials: 0, bestGains: null },
+      3: { passed: false, bestScore: 0, trials: 0, bestGains: null },
+      4: { passed: false, bestScore: 0, trials: 0, bestGains: null }
     },
-    trials: [],
+    trialLogs: [],
     lastActive: new Date().toISOString()
   };
 }
 
-function isTheoryComplete(student) {
-  const tr = student?.theoryRead || {};
-  return !!(tr.m1 && tr.m2 && tr.m3);
-}
-
-async function persistCurrentStudent() {
+async function saveCurrentStudentProfile() {
   if (!currentStudent) return;
   currentStudent.lastActive = new Date().toISOString();
-  const rid = normalizeRollId(currentStudent.rollNo);
 
-  const idx = studentAnalyticsCache.findIndex(s => normalizeRollId(s.rollNo) === rid);
+  const idx = studentAnalyticsCache.findIndex(s => s.roll === currentStudent.roll);
   if (idx >= 0) studentAnalyticsCache[idx] = JSON.parse(JSON.stringify(currentStudent));
   else studentAnalyticsCache.push(JSON.parse(JSON.stringify(currentStudent)));
   saveLocalCaches();
 
   if (firebaseReady && db) {
     try {
-      await setDoc(getAnalyticsDoc(rid), currentStudent);
-    } catch (err) {
-      console.warn("Firestore student sync warning:", err);
+      await setDoc(doc(getAnalyticsCol(), currentStudent.roll), currentStudent, { merge: true });
+    } catch (e) {
+      console.warn("Firestore student save error:", e);
     }
   }
 }
 
-// ── AUTHORIZED LOGIN & NAVIGATION ──────────────────────────────────────────
-window.handleStudentLogin = async function(e) {
-  e.preventDefault();
-  const rollInput = document.getElementById("inputStudentRoll").value.trim().toUpperCase();
-  const emailInput = document.getElementById("inputStudentEmail").value.trim();
-  const nameInput = document.getElementById("inputStudentName").value.trim();
-  const errEl = document.getElementById("loginErrorMsg");
-  errEl.classList.add("hidden");
+// ── PHASE NAVIGATION ───────────────────────────────────────────────────────
+function allTheoryRead() {
+  if (!currentStudent) return false;
+  const tm = currentStudent.theoryModules || {};
+  return !!(tm[1] && tm[2] && tm[3]);
+}
 
-  if (firebaseReady && db) {
-    try {
-      const snap = await getDocs(getRosterCol());
-      if (!snap.empty) {
-        authorizedRosterCache = [];
-        snap.forEach(d => authorizedRosterCache.push(d.data()));
-        saveLocalCaches();
-      }
-    } catch (err) {
-      console.warn("Roster refresh fallback:", err);
+function isM4Passed() {
+  return !!(currentStudent && currentStudent.milestones && currentStudent.milestones[4] && currentStudent.milestones[4].passed);
+}
+
+function updateNavStepper() {
+  if (!currentStudent) return;
+  const theoryDone = allTheoryRead();
+  const m4Done = isM4Passed();
+  const quizDone = !!currentStudent.quizPassed;
+
+  const states = {
+    2: { unlocked: true },
+    3: { unlocked: theoryDone },
+    4: { unlocked: theoryDone },
+    5: { unlocked: m4Done },
+    6: { unlocked: m4Done && quizDone }
+  };
+
+  [2, 3, 4, 5, 6].forEach(p => {
+    const btn = document.getElementById("navBtn" + p);
+    if (!btn) return;
+    const isActive = currentPhase === p;
+    const unlocked = states[p].unlocked;
+    btn.disabled = !unlocked;
+    if (isActive) {
+      btn.className = "px-2.5 py-1 rounded-lg text-xs font-bold bg-[#1d4ed8] text-white transition";
+    } else if (unlocked) {
+      btn.className = "px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-200 hover:bg-white/15 transition";
+    } else {
+      btn.className = "px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-500 cursor-not-allowed opacity-50";
     }
+  });
+}
+
+function navigatePhase(phase) {
+  if (!currentStudent && phase !== 1) return;
+  if (phase === 3 || phase === 4) {
+    if (!allTheoryRead()) return;
+  }
+  if (phase === 5 && !isM4Passed()) return;
+  if (phase === 6 && !(isM4Passed() && currentStudent.quizPassed)) return;
+
+  // Pause simulation if leaving Phase 4
+  if (currentPhase === 4 && phase !== 4 && simRunning) {
+    simPaused = true;
+    document.getElementById("btnStartPause").textContent = "Resume Flight";
   }
 
-  // Validate ONLY Roll Number + Registered Email ID against authorized roster
-  const matched = authorizedRosterCache.find(
-    r => normalizeRollId(r.rollNo) === normalizeRollId(rollInput) &&
-         normalizeEmail(r.email || "") === normalizeEmail(emailInput)
-  );
+  currentPhase = phase;
+  ["phase1View", "phase2View", "phase3View", "phase4View", "phase5View", "phase6View", "facultyView"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add("hidden");
+  });
 
-  if (!matched) {
-    errEl.textContent = "Access Denied: Roll Number and Registered Email ID do not match the official Control Engineering authorized roster. Contact Prof. Shreehari H S if you are not yet registered.";
-    errEl.classList.remove("hidden");
+  const hdr = document.getElementById("mainHeader");
+  if (phase === 1) {
+    hdr.classList.add("hidden");
+    document.getElementById("phase1View").classList.remove("hidden");
+  } else {
+    hdr.classList.remove("hidden");
+    document.getElementById("phase" + phase + "View").classList.remove("hidden");
+  }
+
+  if (phase === 2) renderTheoryUI();
+  if (phase === 4) {
+    renderMilestoneTabs();
+    resizeCanvases();
+    drawScene();
+    drawGraph();
+  }
+  if (phase === 5) renderQuizSection();
+  if (phase === 6) renderLabReportAndCpp();
+
+  updateNavStepper();
+}
+
+function logoutToLogin() {
+  simRunning = false;
+  simPaused = false;
+  currentStudent = null;
+  document.getElementById("loginForm").reset();
+  document.getElementById("loginErrorMsg").classList.add("hidden");
+  navigatePhase(1);
+}
+
+// ── AUTHORIZED STUDENT LOGIN ───────────────────────────────────────────────
+async function handleStudentLogin(e) {
+  e.preventDefault();
+  const rollRaw = document.getElementById("inputStudentRoll").value.trim().toUpperCase();
+  const emailRaw = document.getElementById("inputStudentEmail").value.trim().toLowerCase();
+  const nameRaw = document.getElementById("inputStudentName").value.trim();
+  const errBox = document.getElementById("loginErrorMsg");
+  errBox.classList.add("hidden");
+
+  if (!rollRaw || !emailRaw || !nameRaw) {
+    errBox.textContent = "Please fill in your University Roll Number, Registered Email ID, and Full Name.";
+    errBox.classList.remove("hidden");
     return;
   }
 
-  const rid = normalizeRollId(matched.rollNo);
-  let record = null;
-
+  // Refresh roster from cloud if available
   if (firebaseReady && db) {
     try {
-      const docSnap = await getDoc(getAnalyticsDoc(rid));
-      if (docSnap.exists()) record = docSnap.data();
+      const snap = await getDocs(getRosterCol());
+      authorizedRosterCache = [];
+      snap.forEach(d => authorizedRosterCache.push(d.data()));
+      saveLocalCaches();
     } catch (err) {
-      console.warn("Student fetch fallback:", err);
+      console.warn("Could not refresh roster from cloud:", err);
     }
   }
-  if (!record) {
-    const localFound = studentAnalyticsCache.find(s => normalizeRollId(s.rollNo) === rid);
-    record = localFound ? JSON.parse(JSON.stringify(localFound)) : createEmptyStudentRecord(matched.rollNo, matched.email, nameInput);
-  }
 
-  // Store Name as additional info (not validated against roster)
-  record.email = matched.email.trim().toLowerCase();
-  if (nameInput) record.name = nameInput;
-
-  currentStudent = record;
-  await persistCurrentStudent();
-
-  document.getElementById("hdrStudentName").textContent = currentStudent.name || currentStudent.email;
-  document.getElementById("hdrStudentRoll").textContent = currentStudent.rollNo;
-  document.getElementById("mainHeader").classList.remove("hidden");
-
-  renderTheoryUI();
-  activeMilestoneId = Math.min(4, currentStudent.unlockedMilestone || 1);
-  navigatePhase(isTheoryComplete(currentStudent) ? 3 : 2);
-};
-
-window.logoutToLogin = function() {
-  stopSimulationLoop();
-  currentStudent = null;
-  document.getElementById("mainHeader").classList.add("hidden");
-  showOnlyView("phase1View");
-  currentPhase = 1;
-};
-
-function showOnlyView(viewId) {
-  ["phase1View", "phase2View", "phase3View", "phase4View", "phase5View", "phase6View", "facultyView"].forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    if (id === viewId) el.classList.remove("hidden");
-    else el.classList.add("hidden");
+  const match = authorizedRosterCache.find(entry => {
+    const r = (entry.roll || "").trim().toUpperCase();
+    const em = (entry.email || "").trim().toLowerCase();
+    return r === rollRaw && em === emailRaw;
   });
-}
 
-window.navigatePhase = function(phaseNum) {
-  if (!currentStudent) return;
-  const theoryOk = isTheoryComplete(currentStudent);
-  const m4Passed = !!(currentStudent.milestones && currentStudent.milestones[4] && currentStudent.milestones[4].passed);
-
-  if ((phaseNum === 3 || phaseNum === 4) && !theoryOk) {
-    phaseNum = 2;
-  } else if (phaseNum === 5 && !m4Passed) {
-    phaseNum = theoryOk ? 4 : 2;
-  } else if (phaseNum === 6 && (!m4Passed || !currentStudent.quizPassed)) {
-    phaseNum = m4Passed ? 5 : (theoryOk ? 4 : 2);
+  if (!match) {
+    errBox.innerHTML = `<strong>Access Denied:</strong> Roll Number <span class="mono">${escapeHtml(rollRaw)}</span> and Email <span class="mono">${escapeHtml(emailRaw)}</span> do not match the official authorized course roster. Please verify with Prof. Shreehari H S.`;
+    errBox.classList.remove("hidden");
+    return;
   }
 
-  currentPhase = phaseNum;
-  showOnlyView(`phase${phaseNum}View`);
-  updateNavButtons();
-
-  if (phaseNum === 2) {
-    renderTheoryUI();
-  } else if (phaseNum === 4) {
-    renderMilestoneTabs();
-    selectMilestone(activeMilestoneId);
-    startSimulationLoop();
+  // Load or initialize student analytics record
+  let profile = null;
+  if (firebaseReady && db) {
+    try {
+      const docSnap = await getDoc(doc(getAnalyticsCol(), rollRaw));
+      if (docSnap.exists()) profile = docSnap.data();
+    } catch (err) {
+      console.warn("Could not fetch student profile from cloud:", err);
+    }
+  }
+  if (!profile) {
+    profile = studentAnalyticsCache.find(s => s.roll === rollRaw) || null;
+  }
+  if (!profile) {
+    profile = createDefaultStudentProfile(rollRaw, emailRaw, nameRaw);
   } else {
-    stopSimulationLoop();
+    profile.name = nameRaw;
+    profile.email = emailRaw;
+    if (!profile.theoryModules) profile.theoryModules = { 1: false, 2: false, 3: false };
+    if (!profile.milestones) {
+      profile.milestones = createDefaultStudentProfile(rollRaw, emailRaw, nameRaw).milestones;
+    }
+    if (!Array.isArray(profile.trialLogs)) profile.trialLogs = [];
   }
 
-  if (phaseNum === 5) {
-    renderQuizUI();
-  } else if (phaseNum === 6) {
-    renderLabReportAndCpp();
+  currentStudent = profile;
+  await saveCurrentStudentProfile();
+
+  document.getElementById("hdrStudentName").textContent = currentStudent.name;
+  document.getElementById("hdrStudentRoll").textContent = currentStudent.roll;
+
+  // Determine first unlocked milestone
+  activeMilestoneIdx = 0;
+  for (let i = 0; i < 3; i++) {
+    if (currentStudent.milestones[i + 1].passed) activeMilestoneIdx = i + 1;
   }
-  window.scrollTo({ top: 0, behavior: "smooth" });
-};
 
-function updateNavButtons() {
-  const theoryOk = isTheoryComplete(currentStudent);
-  const m4Passed = !!(currentStudent && currentStudent.milestones?.[4]?.passed);
-  const quizOk = !!(currentStudent && currentStudent.quizPassed);
-
-  [2, 3, 4, 5, 6].forEach(p => {
-    const btn = document.getElementById(`navBtn${p}`);
-    if (!btn) return;
-    const isActive = currentPhase === p;
-    let isDisabled = false;
-    if ((p === 3 || p === 4) && !theoryOk) isDisabled = true;
-    if (p === 5 && !m4Passed) isDisabled = true;
-    if (p === 6 && (!m4Passed || !quizOk)) isDisabled = true;
-
-    btn.disabled = isDisabled;
-    btn.className = isActive
-      ? "px-2.5 py-1 rounded-lg text-xs font-semibold bg-[#1d4ed8] text-white transition"
-      : isDisabled
-        ? "px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-500 cursor-not-allowed opacity-50"
-        : "px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-200 hover:bg-white/10 transition";
-  });
+  zeroPidGains();
+  resetSimulation();
+  navigatePhase(2);
 }
 
-// ── PHASE 2: THEORY MODULES & PHASE 5: POST-SIMULATION QUIZ ────────────────
-let quizSelections = new Array(QUIZ_QUESTIONS.length).fill(null);
-
-window.toggleTheoryModule = async function(modNum) {
+// ── PHASE 2: MANDATORY THEORY MODULES ──────────────────────────────────────
+function toggleTheoryModule(num) {
   if (!currentStudent) return;
-  const key = `m${modNum}`;
-  currentStudent.theoryRead[key] = !currentStudent.theoryRead[key];
-  await persistCurrentStudent();
+  currentStudent.theoryModules[num] = !currentStudent.theoryModules[num];
+  saveCurrentStudentProfile();
   renderTheoryUI();
-  updateNavButtons();
-};
+  updateNavStepper();
+}
 
 function renderTheoryUI() {
   if (!currentStudent) return;
-  const tr = currentStudent.theoryRead || { m1: false, m2: false, m3: false };
-  const readCount = (tr.m1 ? 1 : 0) + (tr.m2 ? 1 : 0) + (tr.m3 ? 1 : 0);
-  document.getElementById("theoryProgressBadge").textContent = `${readCount} / 3`;
-
+  const tm = currentStudent.theoryModules || {};
+  let count = 0;
   [1, 2, 3].forEach(n => {
-    const btn = document.getElementById(`btnMarkMod${n}`);
-    const done = !!tr[`m${n}`];
-    btn.textContent = done ? "Section Understood (Checked)" : "Mark Section Understood";
-    btn.className = done
-      ? "px-3.5 py-1.5 rounded-lg border text-xs font-semibold transition bg-[#15803d] border-[#15803d] text-white"
-      : "px-3.5 py-1.5 rounded-lg border text-xs font-semibold transition bg-slate-50 border-slate-300 text-[#0f2942] hover:border-[#1d4ed8]";
+    const done = !!tm[n];
+    if (done) count++;
+    const btn = document.getElementById("btnMarkMod" + n);
+    if (!btn) return;
+    if (done) {
+      btn.textContent = "✓ Section Understood";
+      btn.className = "px-3.5 py-1.5 rounded-lg border text-xs font-bold transition bg-emerald-50 border-emerald-300 text-[#15803d]";
+    } else {
+      btn.textContent = "Mark Section Understood";
+      btn.className = "px-3.5 py-1.5 rounded-lg border text-xs font-semibold transition bg-slate-50 border-slate-300 text-[#0f2942] hover:border-[#1d4ed8]";
+    }
   });
 
-  const allRead = readCount === 3;
-  document.getElementById("btnUnlockBriefing").disabled = !allRead;
-  document.getElementById("btnUnlockBriefingTop").disabled = !allRead;
-  const stEl = document.getElementById("theoryActionStatus");
-  if (allRead) {
-    stEl.textContent = "All 3 theory modules reviewed. You may now proceed to the Problem Statement and Flight Simulator.";
-    stEl.className = "text-xs font-semibold text-[#15803d]";
-  } else {
-    stEl.textContent = "Mark all 3 engineering theory modules above as understood to unlock the Problem Statement and Flight Simulator.";
-    stEl.className = "text-xs font-medium text-slate-600";
-  }
+  document.getElementById("theoryProgressBadge").textContent = `${count} / 3`;
+  const unlocked = count === 3;
+  document.getElementById("btnUnlockBriefingTop").disabled = !unlocked;
+  document.getElementById("btnUnlockBriefing").disabled = !unlocked;
+  document.getElementById("theoryActionStatus").innerHTML = unlocked
+    ? `<span class="text-[#15803d] font-bold">All 3 theory modules completed.</span> You may now proceed to the Problem Statement and Flight Simulator.`
+    : `Mark all 3 engineering theory modules above as understood (${count}/3 done) to unlock the Problem Statement and Flight Simulator.`;
 }
 
-function renderQuizUI() {
+// ── PHASE 5: POST-SIMULATION 6-QUESTION QUIZ ───────────────────────────────
+function renderQuizSection() {
   if (!currentStudent) return;
-  const m4Passed = !!(currentStudent.milestones?.[4]?.passed);
+  const unlocked = isM4Passed();
+  const lockBox = document.getElementById("quizLockedBySim");
+  const qContainer = document.getElementById("quizQuestionsContainer");
+  const actionBar = document.getElementById("quizActionBar");
+
   document.getElementById("quizAttemptBadge").textContent = currentStudent.quizAttempts || 0;
   document.getElementById("quizScoreBadge").textContent = `${currentStudent.quizBestScore || 0} / ${QUIZ_QUESTIONS.length}`;
   document.getElementById("btnUnlockReport").disabled = !currentStudent.quizPassed;
 
-  document.getElementById("quizLockedBySim").classList.toggle("hidden", m4Passed);
-  document.getElementById("quizQuestionsContainer").classList.toggle("hidden", !m4Passed);
-  document.getElementById("quizActionBar").classList.toggle("hidden", !m4Passed);
-
-  if (m4Passed && document.getElementById("quizQuestionsContainer").children.length === 0) {
-    buildQuizQuestionsDOM();
+  if (!unlocked) {
+    lockBox.classList.remove("hidden");
+    qContainer.classList.add("hidden");
+    actionBar.classList.add("hidden");
+    return;
   }
+
+  lockBox.classList.add("hidden");
+  qContainer.classList.remove("hidden");
+  actionBar.classList.remove("hidden");
+
+  qContainer.innerHTML = QUIZ_QUESTIONS.map((item, qi) => {
+    const sel = selectedQuizAnswers[qi];
+    const optsHtml = item.options.map((opt, oi) => {
+      const checked = sel === oi;
+      return `
+        <label onclick="selectQuizOption(${qi}, ${oi})"
+          class="flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer text-xs transition ${
+            checked ? "bg-[#eff6ff] border-[#1d4ed8] text-[#0f2942] font-semibold" : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
+          }">
+          <input type="radio" name="quiz_q_${qi}" ${checked ? "checked" : ""} class="mt-0.5 accent-[#1d4ed8]">
+          <span>${escapeHtml(opt)}</span>
+        </label>`;
+    }).join("");
+
+    return `
+      <div class="p-4 rounded-xl border border-slate-200 bg-white space-y-2.5">
+        <div class="text-xs sm:text-sm font-bold text-[#0f2942]">${escapeHtml(item.q)}</div>
+        <div class="grid sm:grid-cols-2 gap-2">${optsHtml}</div>
+        <div id="quizFeedback_${qi}" class="hidden text-xs p-2.5 rounded-lg"></div>
+      </div>`;
+  }).join("");
 }
 
-function buildQuizQuestionsDOM() {
-  const container = document.getElementById("quizQuestionsContainer");
-  container.innerHTML = QUIZ_QUESTIONS.map((item, qi) => `
-    <div id="quizCard${qi}" class="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5">
-      <div class="text-xs sm:text-sm font-bold text-[#0f2942]">${escapeHTML(item.q)}</div>
-      <div class="grid sm:grid-cols-2 gap-2">
-        ${item.options.map((opt, oi) => `
-          <label class="flex items-start gap-2 p-2.5 rounded-lg bg-white border border-slate-200 hover:border-[#1d4ed8] cursor-pointer text-xs text-slate-700 transition">
-            <input type="radio" name="quizQ${qi}" value="${oi}" onchange="selectQuizOption(${qi}, ${oi})" class="mt-0.5 accent-[#1d4ed8]">
-            <span>${escapeHTML(opt)}</span>
-          </label>
-        `).join("")}
-      </div>
-      <div id="quizFeedback${qi}" class="hidden text-xs p-2.5 rounded-lg"></div>
-    </div>
-  `).join("");
+function selectQuizOption(qi, oi) {
+  selectedQuizAnswers[qi] = oi;
+  renderQuizSection();
 }
 
-window.selectQuizOption = function(qi, oi) {
-  quizSelections[qi] = oi;
-};
-
-window.submitQuizAttempt = async function() {
-  if (!currentStudent) return;
+async function submitQuizAttempt() {
+  if (!currentStudent || !isM4Passed()) return;
   const statusEl = document.getElementById("quizStatusMessage");
-  if (quizSelections.some(v => v === null)) {
-    statusEl.textContent = "Please select an answer for all 6 questions before submitting.";
-    statusEl.className = "text-xs font-semibold text-[#b91c1c]";
+
+  if (selectedQuizAnswers.some(a => a === null)) {
+    statusEl.innerHTML = `<span class="text-[#b91c1c] font-bold">Please answer all 6 questions before submitting.</span>`;
     return;
   }
 
   let score = 0;
   QUIZ_QUESTIONS.forEach((item, qi) => {
-    const isCorrect = quizSelections[qi] === item.correct;
+    const fb = document.getElementById("quizFeedback_" + qi);
+    const isCorrect = selectedQuizAnswers[qi] === item.correct;
     if (isCorrect) score++;
-    const fb = document.getElementById(`quizFeedback${qi}`);
-    fb.classList.remove("hidden");
-    if (isCorrect) {
-      fb.className = "text-xs p-2.5 rounded-lg bg-green-50 border border-green-200 text-[#15803d] font-medium";
-      fb.textContent = item.explanation;
-    } else {
-      fb.className = "text-xs p-2.5 rounded-lg bg-red-50 border border-red-200 text-[#b91c1c] font-medium";
-      fb.textContent = "Incorrect. Review Modules 1–3 above and try again.";
+    if (fb) {
+      fb.classList.remove("hidden");
+      if (isCorrect) {
+        fb.className = "text-xs p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-[#15803d]";
+        fb.innerHTML = `<strong>Correct!</strong> ${escapeHtml(item.explanation)}`;
+      } else {
+        fb.className = "text-xs p-2.5 rounded-lg bg-red-50 border border-red-200 text-[#b91c1c]";
+        fb.innerHTML = `<strong>Incorrect.</strong> Hint: ${escapeHtml(item.explanation)}`;
+      }
     }
   });
 
   currentStudent.quizAttempts = (currentStudent.quizAttempts || 0) + 1;
   if (score > (currentStudent.quizBestScore || 0)) currentStudent.quizBestScore = score;
+  if (score === QUIZ_QUESTIONS.length) currentStudent.quizPassed = true;
+
+  await saveCurrentStudentProfile();
+  document.getElementById("quizAttemptBadge").textContent = currentStudent.quizAttempts;
+  document.getElementById("quizScoreBadge").textContent = `${currentStudent.quizBestScore} / ${QUIZ_QUESTIONS.length}`;
+  document.getElementById("btnUnlockReport").disabled = !currentStudent.quizPassed;
+  updateNavStepper();
 
   if (score === QUIZ_QUESTIONS.length) {
-    currentStudent.quizPassed = true;
-    statusEl.textContent = `Certification Passed (6 / 6)! You may now open your Official Lab Report and C++ Firmware Export.`;
-    statusEl.className = "text-xs font-bold text-[#15803d]";
+    statusEl.innerHTML = `<span class="text-[#15803d] font-bold">Certification Passed (6 / 6)!</span> Your Official Lab Report and C++ Firmware Export are now unlocked.`;
   } else {
-    statusEl.textContent = `Score: ${score} / 6. You need 6 / 6 (100%) to unlock the Lab Report and C++ Export. Correct the highlighted items and resubmit.`;
-    statusEl.className = "text-xs font-bold text-[#b91c1c]";
+    statusEl.innerHTML = `<span class="text-[#b91c1c] font-bold">Score: ${score} / 6.</span> Review the feedback above and retry to achieve 6 / 6 (100%).`;
   }
-
-  await persistCurrentStudent();
-  renderQuizUI();
-  updateNavButtons();
-};
+}
 
 // ── PHASE 4: PHYSICS ENGINE & FLIGHT SIMULATOR ─────────────────────────────
 let Kp = 0.0, Ki = 0.0, Kd = 0.0;
 let simSpeed = 1;
-let windActive = true; // Compulsory wind gusts across all milestones
 let showGhost = false;
-let running = false;
-let paused = false;
-let crashed = false;
-let missionDone = false;
+let simRunning = false;
+let simPaused = false;
+let simCrashed = false;
+let simFinished = false;
 let simTime = 0;
 let rotorAngle = 0;
-let animClock = 0;
 let windForce = 0;
 let windTimer = 0;
-let windDuration = 0;
-let nextWindTime = 2.5;
-let rafId = null;
-let lastFrameTs = null;
-let accumulator = 0;
+let windDuration = 1.5;
+let nextWindAt = 2.0;
 
-let sim = makeFreshSim();
-let ghost = makeFreshSim();
+let sim = makeSimState();
+let ghost = makeSimState();
+
+// Graph ring buffers
 let gAlt = [], gSet = [], gThrust = [], gTime = [];
 
-function makeFreshSim() {
+function makeSimState() {
   return {
-    altitude: 0,
-    velocity: 0,
-    accel: 0,
-    netForce: 0,
-    thrust: 0,
-    integral: 0,
-    prevError: 0,
+    altitude: 0.0,
+    velocity: 0.0,
+    integral: 0.0,
     stageIdx: 0,
-    hoverTimer: 0,
+    stageStartAlt: 0.0,
+    stageStartTime: 0.0,
+    holdTimer: 0.0,
     inHoldBand: false,
-    stageStartTime: 0,
-    stageStartAlt: 0,
-    stageSettled: false,
-    settlingTimes: [],
-    maxOvershoot: 0,
-    sseSum: 0,
-    sseCount: 0,
-    zeroCrossings: 0,
-    lastErrSign: 0,
     gearDeployed: false,
-    touchdownSpeed: null
+    // Metrics
+    maxOvershoot: 0.0,
+    stageSettleTimes: [],
+    sseSamples: [],
+    touchdownVel: 0.0,
+    lastP: 0, lastI: 0, lastD: 0, lastT: 0, lastFnet: 0, lastAz: 0
   };
 }
 
-function getActiveMilestoneConfig() {
-  return MILESTONE_CONFIGS.find(m => m.id === activeMilestoneId) || MILESTONE_CONFIGS[0];
+function getActiveMilestone() {
+  return MILESTONE_CONFIGS[activeMilestoneIdx];
 }
 
-function renderMilestoneTabs() {
-  if (!currentStudent) return;
-  const tabsEl = document.getElementById("milestoneTabs");
-  tabsEl.innerHTML = MILESTONE_CONFIGS.map(cfg => {
-    const unlocked = cfg.id <= (currentStudent.unlockedMilestone || 1);
-    const msData = currentStudent.milestones[cfg.id];
-    const isSelected = cfg.id === activeMilestoneId;
-    let cls = "py-1.5 px-1 rounded-lg text-[10px] font-bold border text-center transition ";
-    if (!unlocked) {
-      cls += "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed";
-    } else if (isSelected) {
-      cls += "bg-[#0f2942] border-[#0f2942] text-white";
-    } else if (msData && msData.passed) {
-      cls += "bg-green-50 border-green-300 text-[#15803d] hover:bg-green-100";
-    } else {
-      cls += "bg-white border-slate-300 text-[#0f2942] hover:border-[#1d4ed8]";
-    }
-    const statusMark = msData && msData.passed ? " ✓" : !unlocked ? " 🔒" : "";
-    return `<button onclick="selectMilestone(${cfg.id})" ${unlocked ? "" : "disabled"} class="${cls}">${cfg.shortTitle}${statusMark}</button>`;
-  }).join("");
-}
-
-window.selectMilestone = function(id) {
-  if (!currentStudent || id > (currentStudent.unlockedMilestone || 1)) return;
-  activeMilestoneId = id;
-  const cfg = getActiveMilestoneConfig();
-  document.getElementById("msTitle").textContent = cfg.title;
-  document.getElementById("msDesc").textContent = cfg.desc;
-  document.getElementById("milestonePassRuleBadge").textContent = `Pass Cutoff: ≥ ${cfg.passCutoff} / 100`;
-
-  const ffBadge = document.getElementById("hudFeedforwardBadge");
-  ffBadge.textContent = cfg.gravityFeedforward ? "ON (14.72 N)" : "OFF (0.00 N)";
-  ffBadge.className = cfg.gravityFeedforward ? "mono text-[#1d4ed8] ml-0.5" : "mono text-[#b91c1c] ml-0.5";
-
-  windActive = true;
-
-  renderMilestoneTabs();
-  resetSimulation();
-};
-
-function syncGainInputs(source) {
-  const slKp = document.getElementById("slKp");
-  const slKi = document.getElementById("slKi");
-  const slKd = document.getElementById("slKd");
-  const numKp = document.getElementById("numKp");
-  const numKi = document.getElementById("numKi");
-  const numKd = document.getElementById("numKd");
-
-  if (source === "num") {
-    Kp = Math.max(0, Math.min(15, parseFloat(numKp.value) || 0));
-    Ki = Math.max(0, Math.min(5, parseFloat(numKi.value) || 0));
-    Kd = Math.max(0, Math.min(15, parseFloat(numKd.value) || 0));
-    slKp.value = Kp; slKi.value = Ki; slKd.value = Kd;
-  } else {
-    Kp = parseFloat(slKp.value) || 0;
-    Ki = parseFloat(slKi.value) || 0;
-    Kd = parseFloat(slKd.value) || 0;
-    numKp.value = Kp.toFixed(2);
-    numKi.value = Ki.toFixed(2);
-    numKd.value = Kd.toFixed(2);
-  }
-
-  const zeta = Kp > 0 ? Kd / (2 * Math.sqrt(DRONE_MASS * Kp)) : 0;
-  const rhMax = (Kp * Kd) / DRONE_MASS;
-  const zEl = document.getElementById("diagZeta");
+function updateStabilityDiagnostics() {
+  const zetaEl = document.getElementById("diagZeta");
   const rhEl = document.getElementById("diagRH");
-  zEl.textContent = zeta.toFixed(2);
-  zEl.className = zeta >= 0.7 && zeta <= 1.3 ? "text-[#15803d]" : "text-[#0f2942]";
-  rhEl.textContent = rhMax.toFixed(2);
-  rhEl.className = Ki > rhMax && Kp > 0 ? "text-[#b91c1c]" : "text-[#0f2942]";
+  if (!zetaEl || !rhEl) return;
 
-  if (Kp > 0 || Ki > 0 || Kd > 0) {
-    document.getElementById("zeroGainNudge").classList.add("hidden");
-  }
+  const zeta = Kp > 0.001 ? Kd / (2 * Math.sqrt(DRONE_MASS * Kp)) : 0;
+  const rhMax = (Kp * Kd) / DRONE_MASS;
+  zetaEl.textContent = zeta.toFixed(2);
+  rhEl.textContent = rhMax.toFixed(2);
+
+  zetaEl.className = zeta >= 0.7 && zeta <= 1.4 ? "text-[#15803d]" : (zeta > 0 ? "text-[#1d4ed8]" : "text-[#0f2942]");
+  rhEl.className = (Ki > 0 && Ki >= rhMax) ? "text-[#b91c1c]" : "text-[#0f2942]";
 }
 
-window.zeroPidGains = function() {
+function bindGainControls() {
+  const pairs = [
+    ["slKp", "numKp", v => { Kp = v; }],
+    ["slKi", "numKi", v => { Ki = v; }],
+    ["slKd", "numKd", v => { Kd = v; }]
+  ];
+  pairs.forEach(([slId, numId, setter]) => {
+    const sl = document.getElementById(slId);
+    const num = document.getElementById(numId);
+    sl.addEventListener("input", () => {
+      const v = Math.max(0, parseFloat(sl.value) || 0);
+      setter(v);
+      num.value = v.toFixed(2);
+      document.getElementById("zeroGainNudge").classList.add("hidden");
+      updateStabilityDiagnostics();
+    });
+    num.addEventListener("input", () => {
+      const maxV = parseFloat(sl.max);
+      const v = Math.max(0, Math.min(maxV, parseFloat(num.value) || 0));
+      setter(v);
+      sl.value = v;
+      document.getElementById("zeroGainNudge").classList.add("hidden");
+      updateStabilityDiagnostics();
+    });
+  });
+}
+
+function zeroPidGains() {
+  Kp = 0; Ki = 0; Kd = 0;
   document.getElementById("slKp").value = 0;
   document.getElementById("slKi").value = 0;
   document.getElementById("slKd").value = 0;
-  syncGainInputs("sl");
-};
+  document.getElementById("numKp").value = "0.00";
+  document.getElementById("numKi").value = "0.00";
+  document.getElementById("numKd").value = "0.00";
+  updateStabilityDiagnostics();
+}
 
-["slKp", "slKi", "slKd"].forEach(id => {
-  document.getElementById(id).addEventListener("input", () => syncGainInputs("sl"));
-});
-["numKp", "numKi", "numKd"].forEach(id => {
-  document.getElementById(id).addEventListener("input", () => syncGainInputs("num"));
-});
-
-window.setSimSpeed = function(spd) {
+function setSimSpeed(spd) {
   simSpeed = spd;
   [1, 2, 4].forEach(s => {
-    const b = document.getElementById(`spd${s}`);
+    const b = document.getElementById("spd" + s);
+    if (!b) return;
     b.className = s === spd
       ? "px-2 py-0.5 rounded text-[10px] font-bold bg-[#0f2942] text-white"
       : "px-2 py-0.5 rounded text-[10px] font-semibold text-slate-600 hover:text-[#0f2942]";
   });
-};
+}
 
-window.onGhostToggleChange = function() {
+function onGhostToggleChange() {
   showGhost = document.getElementById("chkGhost").checked;
-};
+}
 
-window.toggleCoachOverlay = function(show) {
-  document.getElementById("scoreCoachPanel").classList.toggle("hidden", !show);
-};
+function renderMilestoneTabs() {
+  if (!currentStudent) return;
+  const container = document.getElementById("milestoneTabs");
+  container.innerHTML = MILESTONE_CONFIGS.map((m, idx) => {
+    const st = currentStudent.milestones[m.id];
+    const unlocked = idx === 0 || currentStudent.milestones[idx].passed;
+    const isActive = idx === activeMilestoneIdx;
+    let cls = "py-1.5 px-1 rounded-lg text-[10px] font-bold border transition text-center ";
+    if (isActive) {
+      cls += "bg-[#0f2942] text-white border-[#0f2942]";
+    } else if (!unlocked) {
+      cls += "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed";
+    } else if (st.passed) {
+      cls += "bg-emerald-50 text-[#15803d] border-emerald-300 hover:bg-emerald-100";
+    } else {
+      cls += "bg-white text-[#0f2942] border-slate-300 hover:border-[#1d4ed8]";
+    }
+    const icon = st.passed ? " ✓" : (!unlocked ? " 🔒" : "");
+    return `<button onclick="selectMilestone(${idx})" ${!unlocked ? "disabled" : ""} class="${cls}">${m.short}${icon}</button>`;
+  }).join("");
 
-window.toggleStartPause = function() {
-  if (crashed || missionDone) {
+  const ms = getActiveMilestone();
+  document.getElementById("msTitle").textContent = ms.title;
+  document.getElementById("msDesc").textContent = ms.desc;
+  document.getElementById("milestonePassRuleBadge").textContent = `Pass Cutoff: >= ${ms.passCutoff} / 100`;
+  document.getElementById("hudFeedforwardBadge").textContent = ms.feedforward ? "ON (14.72 N)" : "OFF (0.00 N)";
+  renderStagePills();
+}
+
+function selectMilestone(idx) {
+  if (!currentStudent) return;
+  const unlocked = idx === 0 || currentStudent.milestones[idx].passed;
+  if (!unlocked) return;
+  activeMilestoneIdx = idx;
+  renderMilestoneTabs();
+  resetSimulation();
+}
+
+function renderStagePills() {
+  const ms = getActiveMilestone();
+  const bar = document.getElementById("stagePillsBar");
+  if (!bar) return;
+  bar.innerHTML = ms.stages.map((st, i) => {
+    let cls = "px-2 py-0.5 rounded-full text-[10px] font-bold mono border ";
+    if (i < sim.stageIdx || (simFinished && !simCrashed)) {
+      cls += "bg-emerald-50 text-[#15803d] border-emerald-300";
+    } else if (i === sim.stageIdx) {
+      cls += "bg-[#1d4ed8] text-white border-[#1d4ed8]";
+    } else {
+      cls += "bg-white/90 text-slate-500 border-slate-200";
+    }
+    return `<span class="${cls}">${st.setpoint}m${st.deployGear ? " ⚙" : ""}</span>`;
+  }).join("");
+}
+
+function toggleCoachOverlay(show) {
+  const panel = document.getElementById("scoreCoachPanel");
+  if (!panel) return;
+  if (show) panel.classList.remove("hidden");
+  else panel.classList.add("hidden");
+}
+
+function showCanvasBanner(title, sub, isError = false) {
+  const box = document.getElementById("canvasOverlayBox");
+  const card = document.getElementById("canvasOverlayCard");
+  document.getElementById("overlayTitle").textContent = title;
+  document.getElementById("overlaySub").textContent = sub;
+  card.className = isError
+    ? "bg-white border-2 border-[#b91c1c] rounded-xl px-5 py-3.5 text-center shadow-lg max-w-md"
+    : "bg-white border-2 border-[#0f2942] rounded-xl px-5 py-3.5 text-center shadow-lg max-w-md";
+  document.getElementById("overlayTitle").className = isError ? "text-sm font-bold text-[#b91c1c]" : "text-sm font-bold text-[#0f2942]";
+  box.classList.remove("hidden");
+}
+
+function hideCanvasBanner() {
+  document.getElementById("canvasOverlayBox").classList.add("hidden");
+}
+
+function toggleStartPause() {
+  if (simFinished || simCrashed) {
     resetSimulation();
   }
-  if (!running) {
+  if (!simRunning) {
     if (Kp === 0 && Ki === 0 && Kd === 0) {
       document.getElementById("zeroGainNudge").classList.remove("hidden");
       return;
     }
-    running = true;
-    paused = false;
-    hideCanvasOverlay();
-    document.getElementById("scoreCoachPanel").classList.add("hidden");
-    document.getElementById("btnShowLastCoach").classList.add("hidden");
+    document.getElementById("zeroGainNudge").classList.add("hidden");
+    simRunning = true;
+    simPaused = false;
+    hideCanvasBanner();
+    toggleCoachOverlay(false);
     document.getElementById("btnStartPause").textContent = "Pause Flight";
   } else {
-    paused = !paused;
-    document.getElementById("btnStartPause").textContent = paused ? "Resume Flight" : "Pause Flight";
+    simPaused = !simPaused;
+    document.getElementById("btnStartPause").textContent = simPaused ? "Resume Flight" : "Pause Flight";
   }
-};
+}
 
-window.resetSimulation = function() {
-  running = false;
-  paused = false;
-  crashed = false;
-  missionDone = false;
+function resetSimulation() {
+  simRunning = false;
+  simPaused = false;
+  simCrashed = false;
+  simFinished = false;
   simTime = 0;
   windForce = 0;
   windTimer = 0;
-  windDuration = 0;
-  nextWindTime = 2.0 + Math.random() * 2.5;
-  sim = makeFreshSim();
-  ghost = makeFreshSim();
+  nextWindAt = 1.5 + Math.random() * 2.5;
+  sim = makeSimState();
+  ghost = makeSimState();
   gAlt = []; gSet = []; gThrust = []; gTime = [];
 
-  const cfg = getActiveMilestoneConfig();
-  const sp = cfg.stages[0].setpoint;
-
   document.getElementById("btnStartPause").textContent = "Launch Drone";
-  document.getElementById("scoreCoachPanel").classList.add("hidden");
   document.getElementById("btnShowLastCoach").classList.add("hidden");
   document.getElementById("holdTimerPill").classList.add("hidden");
-  document.getElementById("barThrustVal").textContent = "0.00 N";
-  document.getElementById("barThrustFill").style.width = "0%";
-  document.getElementById("barNetForce").textContent = "0.00 N";
-  document.getElementById("barAccel").textContent = "0.00 m/s²";
-  const wfEl = document.getElementById("barWindForce");
-  wfEl.textContent = "0.00 N";
-  wfEl.className = "mono text-slate-600 ml-0.5 w-14 inline-block text-right";
+  toggleCoachOverlay(false);
 
-  document.getElementById("hudAlt").textContent = "0.00 m";
-  document.getElementById("hudVel").textContent = "0.00 m/s";
-  document.getElementById("hudSet").textContent = sp.toFixed(1) + " m";
-  document.getElementById("hudErr").textContent = "+" + sp.toFixed(2) + " m";
-  document.getElementById("hudHold").textContent = `0.0 / ${cfg.stages[0].hover.toFixed(1)} s`;
-  document.getElementById("hudGear").textContent = "RETRACTED";
-  document.getElementById("hudTime").textContent = "0.0 s";
-  document.getElementById("liveOutBadge").textContent = "T = 0.00 N";
-  document.getElementById("codeErrVal").textContent = sp.toFixed(2) + " m";
-  document.getElementById("codePVal").textContent = "0.00 N";
-  document.getElementById("codeIVal").textContent = "0.00 N";
-  document.getElementById("codeDVal").textContent = "0.00 N";
-
+  const ms = getActiveMilestone();
+  showCanvasBanner("Ready on Launch Pad (0.0 m)", `${ms.title} — Tune Kp, Ki, Kd and click Launch Drone.`);
   renderStagePills();
-  showCanvasOverlay("Ready on Ground (0.0 m)", "Calculate Kp, Ki, Kd from Module 2 formulas and click Launch Drone.", false);
+  updateTelemetryHUD();
   drawScene();
   drawGraph();
-};
-
-function showCanvasOverlay(title, sub, isError) {
-  const box = document.getElementById("canvasOverlayBox");
-  const card = document.getElementById("canvasOverlayCard");
-  const tEl = document.getElementById("overlayTitle");
-  document.getElementById("overlaySub").textContent = sub;
-  tEl.textContent = title;
-  card.className = isError
-    ? "bg-white border-2 border-[#b91c1c] rounded-xl px-5 py-3.5 text-center shadow-lg max-w-md"
-    : "bg-white border-2 border-[#0f2942] rounded-xl px-5 py-3.5 text-center shadow-lg max-w-md";
-  tEl.className = isError ? "text-sm font-bold text-[#b91c1c]" : "text-sm font-bold text-[#0f2942]";
-  box.classList.remove("hidden");
-}
-function hideCanvasOverlay() {
-  document.getElementById("canvasOverlayBox").classList.add("hidden");
 }
 
-function renderStagePills() {
-  const cfg = getActiveMilestoneConfig();
-  const bar = document.getElementById("stagePillsBar");
-  bar.innerHTML = cfg.stages.map((st, idx) => {
-    const done = idx < sim.stageIdx || missionDone;
-    const active = idx === sim.stageIdx && !missionDone;
-    const cls = done
-      ? "bg-[#15803d] text-white border-[#15803d]"
-      : active
-        ? "bg-[#1d4ed8] text-white border-[#1d4ed8]"
-        : "bg-white/90 text-slate-600 border-slate-300";
-    return `<span class="px-2 py-0.5 rounded-full border text-[10px] mono font-bold ${cls}">${st.setpoint}m${st.deployGear ? " ⚙" : ""}</span>`;
-  }).join("");
-}
+function stepPhysicsEntity(s, kp, ki, kd, useFF, wf, dt, isGhost) {
+  const ms = getActiveMilestone();
+  const stage = ms.stages[s.stageIdx];
+  const sp = stage.setpoint;
+  const err = sp - s.altitude;
 
-function stepPhysics(dt) {
-  const cfg = getActiveMilestoneConfig();
-  const curStage = cfg.stages[sim.stageIdx];
-  const sp = curStage.setpoint;
+  // PID with derivative-on-measurement (-Kd * v_z) & anti-windup clamp
+  const P = kp * err;
+  s.integral = Math.max(-35, Math.min(35, s.integral + err * dt));
+  const I = ki * s.integral;
+  const D = -kd * s.velocity;
+  const ff = useFF ? DRONE_WEIGHT : 0;
 
-  // Wind gust generator
-  if (windActive) {
-    windTimer += dt;
-    if (windTimer >= nextWindTime) {
-      windForce = (Math.random() * 5.0 - 2.5); // -2.5 N to +2.5 N
-      windDuration = 1.2 + Math.random() * 1.5;
-      windTimer = 0;
-      nextWindTime = 3.0 + Math.random() * 4.0;
+  let T = ff + P + I + D;
+  T = Math.max(0, Math.min(MAX_THRUST, T));
+
+  const drag = AIR_DRAG_C * s.velocity;
+  const Fnet = T - DRONE_WEIGHT - drag + wf;
+  const az = Fnet / DRONE_MASS;
+
+  s.velocity += az * dt;
+  s.altitude += s.velocity * dt;
+
+  // Ground constraint
+  if (s.altitude < 0) {
+    s.altitude = 0;
+    if (s.velocity < 0) {
+      if (!isGhost && stage.isLanding) {
+        s.touchdownVel = Math.abs(s.velocity);
+      } else if (!isGhost && Math.abs(s.velocity) > 3.0 && simTime > 1.0) {
+        triggerCrash(`Hard ground impact (${Math.abs(s.velocity).toFixed(2)} m/s) before landing stage.`);
+      }
+      s.velocity = 0;
     }
-    if (windTimer > windDuration) windForce = 0;
-  } else {
-    windForce = 0;
+  }
+  if (s.altitude > WORLD_MAX_ALT) {
+    s.altitude = WORLD_MAX_ALT;
+    if (s.velocity > 0) s.velocity = 0;
   }
 
-  // PID Computation (Derivative-on-Measurement to eliminate setpoint kick)
-  const error = sp - sim.altitude;
-  const P = Kp * error;
-
-  // Conditional integration (anti-windup)
-  const ff = cfg.gravityFeedforward ? DRONE_WEIGHT : 0;
-  const rawD = -Kd * sim.velocity;
-  const tentativeT = ff + P + Ki * sim.integral + rawD;
-  const saturatedHigh = tentativeT >= MAX_THRUST && error > 0;
-  const saturatedLow = tentativeT <= 0 && error < 0;
-  if (!saturatedHigh && !saturatedLow) {
-    sim.integral = Math.max(-45, Math.min(45, sim.integral + error * dt));
-  }
-  const I = Ki * sim.integral;
-  const D = rawD;
-  sim.prevError = error;
-
-  const T_total = Math.max(0, Math.min(MAX_THRUST, ff + P + I + D));
-  const F_drag = -AIR_DRAG_C * sim.velocity;
-  const F_net = T_total - DRONE_WEIGHT + F_drag + windForce;
-  const a_z = F_net / DRONE_MASS;
-
-  sim.thrust = T_total;
-  sim.netForce = F_net;
-  sim.accel = a_z;
-  sim.velocity += a_z * dt;
-  sim.altitude += sim.velocity * dt;
-
-  // Track directional overshoot (above setpoint when climbing, below setpoint when descending)
-  if (sp > 0) {
-    const stepDir = sp >= sim.stageStartAlt ? 1 : -1;
-    const over = stepDir === 1 ? (sim.altitude - sp) : (sp - sim.altitude);
-    if (over > sim.maxOvershoot) sim.maxOvershoot = over;
-  }
-  const errSign = Math.abs(error) > 0.35 ? Math.sign(error) : 0;
-  if (errSign !== 0 && sim.lastErrSign !== 0 && errSign !== sim.lastErrSign) {
-    sim.zeroCrossings++;
-  }
-  if (errSign !== 0) sim.lastErrSign = errSign;
-
-  // Automatic Landing Gear Deployment when reaching <= 21.5 m on gear stage
-  if (curStage.deployGear && !sim.gearDeployed && sim.altitude <= 21.5) {
-    sim.gearDeployed = true;
+  // Deploy landing gear automatically when reaching stage with deployGear
+  if (stage.deployGear && s.altitude <= 22.0) {
+    s.gearDeployed = true;
   }
 
-  // Ceiling crash check
-  if (sim.altitude > WORLD_MAX_ALT) {
-    sim.altitude = WORLD_MAX_ALT;
-    triggerCrash("Altitude Ceiling Exceeded (> 62 m). Reduce Kp or increase Kd.");
-    return;
-  }
+  s.lastP = P; s.lastI = I; s.lastD = D; s.lastT = T; s.lastFnet = Fnet; s.lastAz = az;
 
-  // Ground contact & touchdown handling
-  if (sim.altitude <= 0) {
-    if (sim.stageIdx === 0 && simTime < 3.0 && sim.velocity <= 0) {
-      sim.altitude = 0;
-      sim.velocity = 0;
-      sim.accel = 0;
-    } else if (sp === 0 && sim.stageIdx === cfg.stages.length - 1) {
-      sim.touchdownSpeed = Math.abs(sim.velocity);
-      sim.altitude = 0;
-      sim.velocity = 0;
-      sim.accel = 0;
-      if (!sim.gearDeployed) {
-        triggerCrash(`Landing Gear Not Deployed at touchdown (${sim.touchdownSpeed.toFixed(2)} m/s).`);
-      } else if (sim.touchdownSpeed > 2.2) {
-        triggerCrash(`Hard Impact Landing at ${sim.touchdownSpeed.toFixed(2)} m/s (Soft Touchdown: ≤ 0.60 m/s, Max Safe: 2.20 m/s).`);
+  if (!isGhost) {
+    // Directional Overshoot Tracking (fixes step-down false 9.99m overshoot!)
+    if (!stage.isLanding) {
+      let ov = 0;
+      if (sp >= s.stageStartAlt) {
+        ov = Math.max(0, s.altitude - sp);
       } else {
-        completeMission();
+        ov = Math.max(0, sp - s.altitude);
       }
-      return;
-    } else if (sim.velocity < -2.2 && simTime > 3.0) {
-      sim.altitude = 0;
-      triggerCrash(`Ground Impact at ${Math.abs(sim.velocity).toFixed(2)} m/s before landing stage.`);
-      return;
-    } else {
-      sim.altitude = 0;
-      if (sim.velocity < 0) sim.velocity = 0;
+      if (ov > s.maxOvershoot) s.maxOvershoot = ov;
     }
-  }
 
-  // Hover hold & stage progression
-  if (curStage.hover > 0) {
-    const inBand = Math.abs(error) <= 1.2 && Math.abs(sim.velocity) <= 0.8;
-    sim.inHoldBand = inBand;
-    if (inBand) {
-      if (!sim.stageSettled) {
-        sim.stageSettled = true;
-        sim.settlingTimes.push(simTime - sim.stageStartTime);
+    // Check landing touchdown
+    if (stage.isLanding) {
+      if (s.altitude <= 0.08 && simTime > s.stageStartTime + 0.5) {
+        const vTouch = Math.max(s.touchdownVel, Math.abs(s.velocity));
+        s.touchdownVel = vTouch;
+        if (!s.gearDeployed) {
+          triggerCrash("Landing gear was not deployed prior to touchdown.");
+        } else if (vTouch > 2.2) {
+          triggerCrash(`Hard Landing Crash! Touchdown velocity was ${vTouch.toFixed(2)} m/s (> 2.2 m/s limit).`);
+        } else {
+          completeMilestoneTrial();
+        }
       }
-      sim.sseSum += Math.abs(error);
-      sim.sseCount++;
-      sim.hoverTimer += dt;
-      if (sim.hoverTimer >= curStage.hover) {
-        if (sim.stageIdx < cfg.stages.length - 1) {
-          sim.stageIdx++;
-          sim.hoverTimer = 0;
-          sim.inHoldBand = false;
-          sim.stageStartTime = simTime;
-          sim.stageStartAlt = sim.altitude;
-          sim.stageSettled = false;
-          sim.lastErrSign = 0;
+      return;
+    }
+
+    // Hold stability check inside +/- 1.2 m band
+    const inBand = Math.abs(err) <= HOLD_BAND_M && Math.abs(s.velocity) <= 1.2;
+    s.inHoldBand = inBand;
+    if (inBand) {
+      s.holdTimer += dt;
+      s.sseSamples.push(Math.abs(err));
+      if (s.holdTimer >= stage.hold) {
+        s.stageSettleTimes.push(Math.max(0, (simTime - s.stageStartTime) - stage.hold));
+        if (s.stageIdx < ms.stages.length - 1) {
+          s.stageIdx++;
+          s.stageStartAlt = s.altitude;
+          s.stageStartTime = simTime;
+          s.holdTimer = 0;
+          s.inHoldBand = false;
           renderStagePills();
         } else {
-          completeMission();
-          return;
+          completeMilestoneTrial();
         }
       }
     } else {
-      sim.hoverTimer = Math.max(0, sim.hoverTimer - dt * 0.4);
+      s.holdTimer = Math.max(0, s.holdTimer - dt * 0.5);
     }
   } else {
-    sim.inHoldBand = false;
+    // Ghost progression
+    if (!stage.isLanding) {
+      if (Math.abs(err) <= HOLD_BAND_M && Math.abs(s.velocity) <= 1.2) {
+        s.holdTimer += dt;
+        if (s.holdTimer >= stage.hold && s.stageIdx < ms.stages.length - 1) {
+          s.stageIdx++;
+          s.stageStartAlt = s.altitude;
+          s.holdTimer = 0;
+        }
+      }
+    }
+  }
+}
+
+function stepSimulationFrame() {
+  // Compulsory wind gusts (+/- 2.5 N vertical gusts)
+  windTimer += FIXED_DT;
+  if (windTimer >= nextWindAt) {
+    windForce = (Math.random() * 5.0) - 2.5;
+    windDuration = 1.2 + Math.random() * 1.5;
+    windTimer = 0;
+    nextWindAt = 2.5 + Math.random() * 3.5;
+  }
+  const activeWind = windTimer < windDuration ? windForce : 0;
+
+  stepPhysicsEntity(sim, Kp, Ki, Kd, getActiveMilestone().feedforward, activeWind, FIXED_DT, false);
+  if (showGhost) {
+    // Well-tuned analytical reference ghost
+    const gKi = getActiveMilestone().feedforward ? 0.2 : 1.15;
+    stepPhysicsEntity(ghost, 3.2, gKi, 4.4, getActiveMilestone().feedforward, activeWind, FIXED_DT, true);
   }
 
-  // Step Ideal Ghost Drone
-  stepGhostPhysics(dt, cfg);
+  simTime += FIXED_DT;
+  rotorAngle += 0.35 + (sim.lastT / MAX_THRUST) * 0.45;
 
-  simTime += dt;
-  rotorAngle += 0.35 + (T_total / MAX_THRUST) * 0.45;
-
-  // Record telemetry graph
+  const sp = getActiveMilestone().stages[sim.stageIdx].setpoint;
   gAlt.push(sim.altitude);
   gSet.push(sp);
-  gThrust.push(T_total);
+  gThrust.push(sim.lastT);
   gTime.push(simTime);
   if (gAlt.length > GRAPH_MAX_PTS) {
     gAlt.shift(); gSet.shift(); gThrust.shift(); gTime.shift();
   }
-
-  updateLiveHUD(P, I, D, T_total, error, sp, curStage);
-}
-
-function stepGhostPhysics(dt, cfg) {
-  if (!showGhost) return;
-  const gStage = cfg.stages[ghost.stageIdx];
-  const sp = gStage.setpoint;
-  const err = sp - ghost.altitude;
-  const gKp = 3.2, gKi = 1.1, gKd = 4.6;
-  const ff = cfg.gravityFeedforward ? DRONE_WEIGHT : 0;
-  ghost.integral = Math.max(-40, Math.min(40, ghost.integral + err * dt));
-  const T = Math.max(0, Math.min(MAX_THRUST, ff + gKp * err + gKi * ghost.integral - gKd * ghost.velocity));
-  const az = (T - DRONE_WEIGHT - AIR_DRAG_C * ghost.velocity) / DRONE_MASS;
-  ghost.velocity += az * dt;
-  ghost.altitude = Math.max(0, Math.min(WORLD_MAX_ALT, ghost.altitude + ghost.velocity * dt));
-  if (gStage.deployGear && ghost.altitude <= 21.5) ghost.gearDeployed = true;
-  if (gStage.hover > 0 && Math.abs(err) <= 1.2 && Math.abs(ghost.velocity) <= 0.8) {
-    ghost.hoverTimer += dt;
-    if (ghost.hoverTimer >= gStage.hover && ghost.stageIdx < cfg.stages.length - 1) {
-      ghost.stageIdx++;
-      ghost.hoverTimer = 0;
-    }
-  }
-}
-
-function updateLiveHUD(P, I, D, T_total, error, sp, curStage) {
-  document.getElementById("barThrustVal").textContent = T_total.toFixed(2) + " N";
-  document.getElementById("barThrustFill").style.width = `${Math.min(100, (T_total / MAX_THRUST) * 100)}%`;
-  const nf = sim.netForce;
-  document.getElementById("barNetForce").textContent = (nf >= 0 ? "+" : "") + nf.toFixed(2) + " N";
-  document.getElementById("barAccel").textContent = (sim.accel >= 0 ? "+" : "") + sim.accel.toFixed(2) + " m/s²";
-  const wfEl = document.getElementById("barWindForce");
-  wfEl.textContent = (windForce >= 0 ? "+" : "") + windForce.toFixed(2) + " N";
-  wfEl.className = Math.abs(windForce) > 0.05
-    ? "mono text-[#b91c1c] ml-0.5 w-14 inline-block text-right"
-    : "mono text-slate-600 ml-0.5 w-14 inline-block text-right";
-
-  document.getElementById("hudAlt").textContent = sim.altitude.toFixed(2) + " m";
-  document.getElementById("hudVel").textContent = (sim.velocity >= 0 ? "+" : "") + sim.velocity.toFixed(2) + " m/s";
-  document.getElementById("hudSet").textContent = sp.toFixed(1) + " m";
-  const errEl = document.getElementById("hudErr");
-  errEl.textContent = (error >= 0 ? "+" : "") + error.toFixed(2) + " m";
-  errEl.className = Math.abs(error) > 4 ? "text-[#b91c1c]" : Math.abs(error) <= 1.2 ? "text-[#15803d]" : "text-[#0f2942]";
-
-  document.getElementById("hudHold").textContent = curStage.hover > 0
-    ? `${sim.hoverTimer.toFixed(1)} / ${curStage.hover.toFixed(1)} s`
-    : "LANDING";
-  const gearEl = document.getElementById("hudGear");
-  gearEl.textContent = sim.gearDeployed ? "DEPLOYED" : "RETRACTED";
-  gearEl.className = sim.gearDeployed ? "text-[#15803d] font-bold" : "text-slate-600";
-  document.getElementById("hudTime").textContent = simTime.toFixed(1) + " s";
-
-  // Top-Center Animated Hold Timer Pill
-  const holdPill = document.getElementById("holdTimerPill");
-  const holdIcon = document.getElementById("holdStopwatchIcon");
-  const holdTxt = document.getElementById("holdPillText");
-  const holdBar = document.getElementById("holdPillBar");
-  if (running && curStage.hover > 0) {
-    holdPill.classList.remove("hidden");
-    const pct = Math.min(100, (sim.hoverTimer / curStage.hover) * 100);
-    holdBar.style.width = `${pct}%`;
-    if (sim.inHoldBand) {
-      holdPill.className = "absolute top-2.5 left-1/2 -translate-x-1/2 bg-green-50/95 border border-[#15803d] rounded-full px-3 py-1 shadow-sm flex items-center gap-2 pointer-events-none";
-      holdIcon.setAttribute("class", "w-4 h-4 text-[#15803d] shrink-0 hold-icon-pulse");
-      holdTxt.className = "mono text-[11px] font-bold text-[#15803d]";
-      holdTxt.textContent = `HOLDING ${sp}m: ${sim.hoverTimer.toFixed(1)} / ${curStage.hover.toFixed(1)} s`;
-    } else {
-      holdPill.className = "absolute top-2.5 left-1/2 -translate-x-1/2 bg-white/95 border border-slate-300 rounded-full px-3 py-1 shadow-sm flex items-center gap-2 pointer-events-none";
-      holdIcon.setAttribute("class", "w-4 h-4 text-[#1d4ed8] shrink-0");
-      holdTxt.className = "mono text-[11px] font-bold text-[#0f2942]";
-      holdTxt.textContent = `TARGET ${sp}m: ${sim.hoverTimer.toFixed(1)} / ${curStage.hover.toFixed(1)} s`;
-    }
-  } else {
-    holdPill.classList.add("hidden");
-  }
-
-  // Live code monitor
-  document.getElementById("liveOutBadge").textContent = `T = ${T_total.toFixed(2)} N`;
-  document.getElementById("codeErrVal").textContent = `${error.toFixed(2)} m`;
-  document.getElementById("codePVal").textContent = `${P.toFixed(2)} N`;
-  document.getElementById("codeIVal").textContent = `${I.toFixed(2)} N`;
-  document.getElementById("codeDVal").textContent = `${D.toFixed(2)} N`;
-
-  const maxTerm = Math.max(Math.abs(P), Math.abs(I), Math.abs(D), 0.1);
-  document.getElementById("codeLineP").className = "code-line" + (Math.abs(P) === maxTerm ? " code-active" : "");
-  document.getElementById("codeLineI").className = "code-line" + (Math.abs(I) === maxTerm ? " code-active" : "");
-  document.getElementById("codeLineD").className = "code-line" + (Math.abs(D) === maxTerm ? " code-active" : "");
 }
 
 function triggerCrash(reason) {
-  crashed = true;
-  running = false;
-  document.getElementById("holdTimerPill").classList.add("hidden");
+  simCrashed = true;
+  simRunning = false;
+  simFinished = true;
   document.getElementById("btnStartPause").textContent = "Retry Trial";
-  evaluateAndRecordTrial(false, reason);
-}
-
-function completeMission() {
-  missionDone = true;
-  running = false;
   document.getElementById("holdTimerPill").classList.add("hidden");
-  renderStagePills();
-  document.getElementById("btnStartPause").textContent = "Run Another Trial";
-  evaluateAndRecordTrial(true, null);
+  showCanvasBanner("Flight Crash Detected", reason, true);
+  evaluateAndRecordTrial(true, reason);
 }
 
-async function evaluateAndRecordTrial(didComplete, crashReason) {
-  const cfg = getActiveMilestoneConfig();
-  const cutoff = cfg.passCutoff;
-  const totalStages = cfg.stages.length;
-  const doneStages = didComplete ? totalStages : sim.stageIdx;
+function completeMilestoneTrial() {
+  simRunning = false;
+  simFinished = true;
+  document.getElementById("btnStartPause").textContent = "Run Another Trial";
+  document.getElementById("holdTimerPill").classList.add("hidden");
+  evaluateAndRecordTrial(false, "");
+}
 
-  // 1. Overshoot Score (25 pts)
-  const overshootScore = Math.max(0, Math.round(25 - Math.max(0, sim.maxOvershoot - 0.5) * 4.5));
+async function evaluateAndRecordTrial(crashed, crashReason) {
+  const ms = getActiveMilestone();
+  const avgSettle = sim.stageSettleTimes.length
+    ? sim.stageSettleTimes.reduce((a, b) => a + b, 0) / sim.stageSettleTimes.length
+    : Math.max(0, simTime - (ms.stages[0].hold || 5));
+  const avgSSE = sim.sseSamples.length
+    ? sim.sseSamples.reduce((a, b) => a + b, 0) / sim.sseSamples.length
+    : Math.abs(ms.stages[sim.stageIdx].setpoint - sim.altitude);
 
-  // 2. Settling Time Score (25 pts)
-  const avgSettle = sim.settlingTimes.length > 0
-    ? sim.settlingTimes.reduce((a, b) => a + b, 0) / sim.settlingTimes.length
-    : 25;
-  const settlingScore = Math.max(0, Math.min(25, Math.round(25 - Math.max(0, avgSettle - 5.5) * 2.0)));
+  let scOver = 0, scSettle = 0, scSSE = 0, scLand = 0;
 
-  // 3. Steady-State Error Score (25 pts)
-  const avgSSE = sim.sseCount > 0 ? sim.sseSum / sim.sseCount : 2.0;
-  const sseScore = Math.max(0, Math.min(25, Math.round(25 - avgSSE * 18)));
-
-  // 4. Completion & Touchdown Smoothness (25 pts)
-  let landingScore = Math.round((doneStages / totalStages) * 15);
-  const landVel = sim.touchdownSpeed !== null ? sim.touchdownSpeed : Math.abs(sim.velocity);
-  if (didComplete) {
-    if (cfg.id === 4) {
-      if (sim.gearDeployed && landVel <= 0.6) {
-        landingScore = 25;
-      } else if (sim.gearDeployed && landVel <= 2.2) {
-        landingScore = Math.max(14, Math.round(25 - ((landVel - 0.6) / 1.6) * 11));
-      } else {
-        landingScore = 0;
-      }
+  if (!crashed) {
+    // 1. Overshoot (25 pts): <= 0.5m full marks, loses 4 pts per extra meter
+    scOver = Math.round(Math.max(0, Math.min(25, 25 - Math.max(0, sim.maxOvershoot - 0.5) * 4.5)));
+    // 2. Settling speed (25 pts): <= 6s full marks
+    scSettle = Math.round(Math.max(0, Math.min(25, 25 - Math.max(0, avgSettle - 6.0) * 1.8)));
+    // 3. Steady-State Error (25 pts): <= 0.15m full marks
+    scSSE = Math.round(Math.max(0, Math.min(25, 25 - Math.max(0, avgSSE - 0.15) * 22)));
+    // 4. Touchdown / Stability (25 pts)
+    if (ms.id === 4) {
+      scLand = sim.touchdownVel <= 0.6
+        ? 25
+        : Math.round(Math.max(0, 25 - (sim.touchdownVel - 0.6) * 15));
     } else {
-      landingScore = 25;
+      scLand = 25;
     }
   }
-  if (crashed) landingScore = 0;
 
-  const totalScore = Math.max(0, Math.min(100, overshootScore + settlingScore + sseScore + landingScore));
-  const passed = totalScore >= cutoff && didComplete && !crashed;
+  const totalScore = scOver + scSettle + scSSE + scLand;
+  const passed = !crashed && totalScore >= ms.passCutoff;
 
+  // Diagnostic coaching tips
   const tips = [];
-  if (crashed && crashReason) tips.push(`Crash Analysis: ${crashReason}`);
-  if (sim.maxOvershoot > 1.8) {
-    const idealKd = (2 * 1.0 * Math.sqrt(DRONE_MASS * Math.max(0.5, Kp))).toFixed(2);
-    tips.push(`Excessive Overshoot (${sim.maxOvershoot.toFixed(2)} m): Increase Kd toward critical damping Kd ≈ 2√(1.5·Kp) ≈ ${idealKd} N·s/m, or reduce Kp.`);
-  }
-  if (sim.zeroCrossings > 4) {
-    tips.push(`Oscillatory Response (${sim.zeroCrossings} crossings): Increase Kd to raise damping ratio ζ and ensure Ki remains well below Routh-Hurwitz limit Kp·Kd/m.`);
-  }
-  if (!cfg.gravityFeedforward && avgSSE > 0.4) {
-    tips.push(`Steady-State Gravity Droop (SSE = ${avgSSE.toFixed(2)} m): Increase Ki (try 0.80–1.50 N/(m·s)) so the integral carries the full 14.72 N weight.`);
-  }
-  if (cfg.id === 4 && didComplete && landVel > 0.6) {
-    tips.push(`Acceptable Touchdown (${landVel.toFixed(2)} m/s): Increase Kd live during the 20m → 0m descent to brake vertical speed to ≤ 0.60 m/s for full touchdown bonus.`);
-  }
-  if (tips.length === 0) {
-    tips.push("Well-tuned closed-loop response: clean damping, accurate altitude hold, and controlled vertical speed.");
+  if (crashed) {
+    tips.push(`• ${crashReason}`);
+    tips.push(`• Tip: Reduce Kp or increase Kd toward critical damping Kd ≈ 2√(1.5·Kp) ≈ ${(2 * Math.sqrt(1.5 * Math.max(0.5, Kp))).toFixed(2)} N·s/m.`);
+  } else {
+    if (scOver < 20) tips.push(`• Excessive Overshoot (${sim.maxOvershoot.toFixed(2)} m): Increase Kd toward critical damping Kd ≈ 2√(1.5·Kp) ≈ ${(2 * Math.sqrt(1.5 * Math.max(0.5, Kp))).toFixed(2)} N·s/m, or slightly reduce Kp.`);
+    if (scSettle < 20) tips.push(`• Slow Settling (${avgSettle.toFixed(1)} s/stage): Increase Kp to raise natural frequency ω_n = √(Kp / 1.50).`);
+    if (scSSE < 20) tips.push(`• Steady-State Error (${avgSSE.toFixed(2)} m): Increase Ki moderately (keep Ki < Kp·Kd/1.50) to cancel gravity droop and wind gusts.`);
+    if (ms.id === 4 && scLand < 22) tips.push(`• Firm Touchdown (${sim.touchdownVel.toFixed(2)} m/s): Increase Kd during the final 20m → 0m glide to brake below 0.60 m/s.`);
+    if (tips.length === 0) tips.push(`• Excellent closed-loop control! Crisp damping, accurate wind rejection, and smooth trajectory tracking.`);
   }
 
-  // Render Coach Overlay
-  hideCanvasOverlay();
-  document.getElementById("scoreCoachPanel").classList.remove("hidden");
-  document.getElementById("btnShowLastCoach").classList.remove("hidden");
+  // Update Student Record
+  if (currentStudent) {
+    const mRec = currentStudent.milestones[ms.id];
+    mRec.trials = (mRec.trials || 0) + 1;
+    if (totalScore > (mRec.bestScore || 0)) {
+      mRec.bestScore = totalScore;
+      mRec.bestGains = { kp: +Kp.toFixed(2), ki: +Ki.toFixed(2), kd: +Kd.toFixed(2) };
+    }
+    if (passed) mRec.passed = true;
+
+    currentStudent.trialLogs.unshift({
+      time: new Date().toISOString(),
+      milestone: ms.id,
+      score: totalScore,
+      passed,
+      crashed,
+      kp: +Kp.toFixed(2),
+      ki: +Ki.toFixed(2),
+      kd: +Kd.toFixed(2),
+      overshoot: +sim.maxOvershoot.toFixed(2),
+      sse: +avgSSE.toFixed(2),
+      touchdownVel: ms.id === 4 ? +sim.touchdownVel.toFixed(2) : null
+    });
+    if (currentStudent.trialLogs.length > 40) currentStudent.trialLogs.pop();
+
+    await saveCurrentStudentProfile();
+  }
+
+  // Populate Coach Overlay
   document.getElementById("coachScoreBig").textContent = `${totalScore} / 100`;
   document.getElementById("coachScoreBig").className = passed
     ? "text-2xl font-bold mono text-[#15803d]"
     : "text-2xl font-bold mono text-[#b91c1c]";
   document.getElementById("coachResultBadge").textContent = passed
-    ? `PASSED (Cutoff ≥ ${cutoff})`
-    : crashed
-      ? `CRASHED (Need ≥ ${cutoff})`
-      : `BELOW CUTOFF (Need ≥ ${cutoff})`;
+    ? `PASSED ${ms.short} (Cutoff >= ${ms.passCutoff})`
+    : `NOT PASSED — Need >= ${ms.passCutoff} / 100`;
   document.getElementById("coachResultBadge").className = passed
     ? "text-xs font-bold text-[#15803d]"
     : "text-xs font-bold text-[#b91c1c]";
 
-  document.getElementById("scOvershoot").textContent = `${overshootScore}/25`;
-  document.getElementById("scSettling").textContent = `${settlingScore}/25`;
-  document.getElementById("scSSE").textContent = `${sseScore}/25`;
-  document.getElementById("scLanding").textContent = `${landingScore}/25`;
-  document.getElementById("coachTipsBox").innerHTML = tips.map(t => `<div>&bull; ${escapeHTML(t)}</div>`).join("");
+  document.getElementById("scOvershoot").textContent = `${scOver}/25`;
+  document.getElementById("scSettling").textContent = `${scSettle}/25`;
+  document.getElementById("scSSE").textContent = `${scSSE}/25`;
+  document.getElementById("scLanding").textContent = `${scLand}/25`;
+  document.getElementById("coachTipsBox").innerHTML = tips.map(t => `<div>${escapeHtml(t)}</div>`).join("");
 
-  // Persist to Student Record & Firestore
-  if (currentStudent) {
-    const msRec = currentStudent.milestones[cfg.id];
-    msRec.attempts = (msRec.attempts || 0) + 1;
-    if (totalScore > msRec.bestScore) {
-      msRec.bestScore = totalScore;
-      msRec.bestGains = { kp: Kp, ki: Ki, kd: Kd };
-    }
-    if (passed) {
-      msRec.passed = true;
-      if (cfg.id < 4 && (currentStudent.unlockedMilestone || 1) <= cfg.id) {
-        currentStudent.unlockedMilestone = cfg.id + 1;
-      }
-    }
-
-    currentStudent.trials = currentStudent.trials || [];
-    currentStudent.trials.unshift({
-      time: new Date().toLocaleTimeString(),
-      milestone: cfg.id,
-      score: totalScore,
-      passed,
-      crashed,
-      kp: Number(Kp.toFixed(2)),
-      ki: Number(Ki.toFixed(2)),
-      kd: Number(Kd.toFixed(2)),
-      overshoot: Number(sim.maxOvershoot.toFixed(2)),
-      sse: Number(avgSSE.toFixed(2)),
-      touchdown: cfg.id === 4 ? Number(landVel.toFixed(2)) : null
-    });
-    if (currentStudent.trials.length > 40) currentStudent.trials.pop();
-
-    await persistCurrentStudent();
-    renderMilestoneTabs();
-    updateNavButtons();
+  const actionRow = document.getElementById("coachActionRow");
+  if (passed && activeMilestoneIdx < 3) {
+    actionRow.innerHTML = `
+      <button onclick="selectMilestone(${activeMilestoneIdx + 1})" class="flex-1 py-2 rounded-lg bg-[#15803d] hover:bg-[#0f2942] text-white text-xs font-bold transition">
+        Advance to Milestone ${activeMilestoneIdx + 2} &rarr;
+      </button>
+      <button onclick="resetSimulation()" class="px-3.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#0f2942] text-xs font-semibold border border-slate-300">
+        Retry
+      </button>`;
+  } else if (passed && activeMilestoneIdx === 3) {
+    actionRow.innerHTML = `
+      <button onclick="navigatePhase(5)" class="flex-1 py-2 rounded-lg bg-[#15803d] hover:bg-[#0f2942] text-white text-xs font-bold transition">
+        Proceed to Certification Quiz &rarr;
+      </button>
+      <button onclick="resetSimulation()" class="px-3.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#0f2942] text-xs font-semibold border border-slate-300">
+        Retry
+      </button>`;
+  } else {
+    actionRow.innerHTML = `
+      <button onclick="resetSimulation()" class="flex-1 py-2 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white text-xs font-bold transition">
+        Adjust Gains &amp; Retry ${ms.short}
+      </button>`;
   }
 
-  const actRow = document.getElementById("coachActionRow");
-  if (passed && cfg.id < 4) {
-    actRow.innerHTML = `
-      <button onclick="selectMilestone(${cfg.id + 1})" class="flex-1 py-2 rounded-lg bg-[#1d4ed8] hover:bg-[#0f2942] text-white text-xs font-semibold transition">Unlock &amp; Start Milestone ${cfg.id + 1} &rarr;</button>
-      <button onclick="resetSimulation()" class="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#0f2942] border border-slate-300 text-xs font-semibold transition">Retry</button>`;
-  } else if (passed && cfg.id === 4) {
-    actRow.innerHTML = `
-      <button onclick="navigatePhase(5)" class="flex-1 py-2 rounded-lg bg-[#15803d] hover:bg-[#0f2942] text-white text-xs font-semibold transition">Proceed to Certification Quiz &rarr;</button>
-      <button onclick="resetSimulation()" class="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-[#0f2942] border border-slate-300 text-xs font-semibold transition">Retry</button>`;
+  document.getElementById("btnShowLastCoach").classList.remove("hidden");
+  renderMilestoneTabs();
+  updateNavStepper();
+  toggleCoachOverlay(true);
+}
+
+// ── TELEMETRY HUD & HOLD TIMER PILL ────────────────────────────────────────
+function updateTelemetryHUD() {
+  const ms = getActiveMilestone();
+  const stage = ms.stages[sim.stageIdx];
+  const sp = stage.setpoint;
+  const err = sp - sim.altitude;
+
+  document.getElementById("hudAlt").textContent = `${sim.altitude.toFixed(2)} m`;
+  document.getElementById("hudVel").textContent = `${sim.velocity.toFixed(2)} m/s`;
+  document.getElementById("hudSet").textContent = `${sp.toFixed(1)} m`;
+  document.getElementById("hudErr").textContent = `${err >= 0 ? "+" : ""}${err.toFixed(2)} m`;
+  document.getElementById("hudHold").textContent = stage.isLanding ? "LANDING" : `${sim.holdTimer.toFixed(1)} / ${stage.hold.toFixed(1)} s`;
+  document.getElementById("hudGear").textContent = sim.gearDeployed ? "DEPLOYED" : "RETRACTED";
+  document.getElementById("hudGear").className = sim.gearDeployed ? "text-[#15803d] font-bold" : "text-slate-600";
+  document.getElementById("hudTime").textContent = `${simTime.toFixed(1)} s`;
+
+  // Top Force Bar
+  document.getElementById("barThrustVal").textContent = `${sim.lastT.toFixed(2)} N`;
+  document.getElementById("barThrustFill").style.width = `${Math.min(100, (sim.lastT / MAX_THRUST) * 100).toFixed(1)}%`;
+  document.getElementById("barNetForce").textContent = `${sim.lastFnet >= 0 ? "+" : ""}${sim.lastFnet.toFixed(2)} N`;
+  document.getElementById("barAccel").textContent = `${sim.lastAz >= 0 ? "+" : ""}${sim.lastAz.toFixed(2)} m/s²`;
+  const activeW = windTimer < windDuration ? windForce : 0;
+  document.getElementById("barWindForce").textContent = `${activeW >= 0 ? "+" : ""}${activeW.toFixed(2)} N`;
+  document.getElementById("barWindForce").className = Math.abs(activeW) > 0.1 ? "mono text-[#b91c1c] font-bold ml-0.5 w-14 inline-block text-right" : "mono text-slate-600 ml-0.5 w-14 inline-block text-right";
+
+  // Live Control Law Monitor
+  document.getElementById("liveOutBadge").textContent = `T = ${sim.lastT.toFixed(2)} N`;
+  document.getElementById("codeErrVal").textContent = `${err >= 0 ? "+" : ""}${err.toFixed(2)} m`;
+  document.getElementById("codePVal").textContent = `${sim.lastP.toFixed(2)} N`;
+  document.getElementById("codeIVal").textContent = `${sim.lastI.toFixed(2)} N`;
+  document.getElementById("codeDVal").textContent = `${sim.lastD.toFixed(2)} N`;
+
+  const lp = document.getElementById("codeLineP");
+  const li = document.getElementById("codeLineI");
+  const ld = document.getElementById("codeLineD");
+  lp.className = "code-line"; li.className = "code-line"; ld.className = "code-line";
+  const aP = Math.abs(sim.lastP), aI = Math.abs(sim.lastI), aD = Math.abs(sim.lastD);
+  const mx = Math.max(aP, aI, aD);
+  if (mx > 0.2) {
+    if (aP === mx) lp.classList.add("code-active");
+    else if (aI === mx) li.classList.add("code-active");
+    else ld.classList.add("code-active");
+  }
+
+  // Animated Hold Timer Pill (Top-Center)
+  const pill = document.getElementById("holdTimerPill");
+  const icon = document.getElementById("holdStopwatchIcon");
+  if (simRunning && !stage.isLanding) {
+    pill.classList.remove("hidden");
+    const pct = Math.min(100, (sim.holdTimer / stage.hold) * 100);
+    document.getElementById("holdPillText").textContent = sim.inHoldBand
+      ? `HOLDING ${sim.holdTimer.toFixed(1)} / ${stage.hold.toFixed(1)} s`
+      : `STABILIZE AT ${sp}m (${sim.holdTimer.toFixed(1)}s)`;
+    document.getElementById("holdPillBar").style.width = `${pct}%`;
+    if (sim.inHoldBand) {
+      icon.classList.add("hold-icon-pulse", "text-[#15803d]");
+      icon.classList.remove("text-[#1d4ed8]");
+    } else {
+      icon.classList.remove("hold-icon-pulse", "text-[#15803d]");
+      icon.classList.add("text-[#1d4ed8]");
+    }
   } else {
-    actRow.innerHTML = `<button onclick="resetSimulation()" class="w-full py-2 rounded-lg bg-[#0f2942] hover:bg-[#1d4ed8] text-white text-xs font-semibold transition">Reset &amp; Retune Gains</button>`;
+    pill.classList.add("hidden");
   }
 }
 
-// ── CANVAS DRAWING (DRONE ARENA + ANIMATED HOLD TIMER + DUAL TELEMETRY GRAPH) ──
+// ── CANVAS RENDERING (FLIGHT ARENA + DUAL TELEMETRY GRAPH) ─────────────────
 const droneCanvas = document.getElementById("droneCanvas");
 const graphCanvas = document.getElementById("graphCanvas");
 const dctx = droneCanvas.getContext("2d");
 const gctx = graphCanvas.getContext("2d");
 
 function resizeCanvases() {
-  if (!droneCanvas || !graphCanvas) return;
-  const dw = droneCanvas.clientWidth, dh = droneCanvas.clientHeight;
-  if (dw > 0 && dh > 0 && (droneCanvas.width !== dw || droneCanvas.height !== dh)) {
-    droneCanvas.width = dw; droneCanvas.height = dh;
-  }
-  const gw = graphCanvas.clientWidth, gh = graphCanvas.clientHeight;
-  if (gw > 0 && gh > 0 && (graphCanvas.width !== gw || graphCanvas.height !== gh)) {
-    graphCanvas.width = gw; graphCanvas.height = gh;
-  }
+  [droneCanvas, graphCanvas].forEach(c => {
+    if (!c) return;
+    const w = c.clientWidth, h = c.clientHeight;
+    if (w > 0 && h > 0 && (c.width !== w || c.height !== h)) {
+      c.width = w;
+      c.height = h;
+    }
+  });
 }
 
 function altToY(alt, H) {
-  const groundY = H - 34;
+  const groundY = H - 32;
   const topPad = 24;
   return groundY - (alt / WORLD_MAX_ALT) * (groundY - topPad);
 }
 
-function drawHoldTimerRing(ctx, cx, cy, progress, holdSec, targetSec, isHolding) {
-  ctx.save();
-  const radius = 26;
-
-  // Soft pulsing halo when actively holding inside tolerance band
-  if (isHolding) {
-    const pulseR = radius + 4 + Math.sin(animClock * 7) * 3.5;
-    ctx.beginPath();
-    ctx.arc(cx, cy, pulseR, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(21, 128, 61, 0.14)";
-    ctx.fill();
-  }
-
-  // White badge disc
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
-  ctx.fill();
-  ctx.lineWidth = 3.5;
-  ctx.strokeStyle = "#e2e8f0";
-  ctx.stroke();
-
-  // Animated circular progress arc
-  const startAng = -Math.PI / 2;
-  const endAng = startAng + Math.max(0.02, Math.min(1, progress)) * Math.PI * 2;
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius, startAng, endAng);
-  ctx.lineWidth = 4;
-  ctx.lineCap = "round";
-  ctx.strokeStyle = isHolding ? "#15803d" : "#1d4ed8";
-  ctx.stroke();
-
-  // Animated stopwatch icon inside top half of ring
-  const iconY = cy - 7;
-  const iconR = 6.5;
-  ctx.strokeStyle = isHolding ? "#15803d" : "#0f2942";
-  ctx.lineWidth = 1.6;
-  ctx.beginPath();
-  ctx.arc(cx, iconY, iconR, 0, Math.PI * 2);
-  ctx.stroke();
-  // Stopwatch crown button
-  ctx.beginPath();
-  ctx.moveTo(cx - 2.5, iconY - iconR - 2.5);
-  ctx.lineTo(cx + 2.5, iconY - iconR - 2.5);
-  ctx.moveTo(cx, iconY - iconR - 2.5);
-  ctx.lineTo(cx, iconY - iconR);
-  ctx.stroke();
-  // Sweeping stopwatch hand
-  const handAng = -Math.PI / 2 + (holdSec % 2) * Math.PI;
-  ctx.beginPath();
-  ctx.moveTo(cx, iconY);
-  ctx.lineTo(cx + Math.cos(handAng) * 4.5, iconY + Math.sin(handAng) * 4.5);
-  ctx.stroke();
-
-  // Digital hold readout inside bottom half of ring
-  ctx.fillStyle = isHolding ? "#15803d" : "#0f2942";
-  ctx.font = "bold 9px 'JetBrains Mono', monospace";
-  ctx.textAlign = "center";
-  ctx.fillText(`${holdSec.toFixed(1)}s`, cx, cy + 12);
-
-  // Label beneath ring
-  ctx.fillStyle = isHolding ? "#15803d" : "#475569";
-  ctx.font = "bold 9px 'JetBrains Mono', monospace";
-  ctx.fillText(isHolding ? `HOLD / ${targetSec}s` : `STABILIZE`, cx, cy + radius + 12);
-
-  ctx.restore();
-}
-
-function drawDroneBody(ctx, x, y, alpha, gearOut, rotor, thrustN) {
+function drawDroneSprite(ctx, x, y, alpha, gearOut, rotor) {
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(x, y);
 
   // Arms
   ctx.strokeStyle = "#334155";
-  ctx.lineWidth = 3.5;
-  ctx.lineCap = "round";
-  ctx.beginPath(); ctx.moveTo(-34, 0); ctx.lineTo(34, 0); ctx.stroke();
-
-  // Central Fuselage
-  ctx.fillStyle = "#0f2942";
-  ctx.strokeStyle = "#1d4ed8";
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.roundRect(-14, -7, 28, 14, 4);
-  ctx.fill(); ctx.stroke();
+  ctx.moveTo(-28, 0); ctx.lineTo(28, 0);
+  ctx.stroke();
+
+  // Body
+  ctx.fillStyle = "#0f2942";
+  ctx.beginPath();
+  ctx.roundRect(-12, -6, 24, 12, 3);
+  ctx.fill();
+  ctx.fillStyle = "#1d4ed8";
+  ctx.fillRect(-5, -2, 10, 4);
 
   // Rotors
-  [-30, -14, 14, 30].forEach((rx, idx) => {
+  [-24, 24].forEach((rx, idx) => {
     ctx.save();
     ctx.translate(rx, -6);
-    const bladeLen = 9 + Math.sin(rotor * (idx % 2 === 0 ? 1 : -1)) * 2.5;
+    const bladeW = 12 * Math.abs(Math.cos(rotor + idx * 1.2)) + 3;
     ctx.strokeStyle = "#1d4ed8";
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(-bladeLen, 0); ctx.lineTo(bladeLen, 0); ctx.stroke();
-    ctx.fillStyle = "#0f2942";
-    ctx.beginPath(); ctx.arc(0, 0, 2, 0, Math.PI * 2); ctx.fill();
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(-bladeW, 0); ctx.lineTo(bladeW, 0);
+    ctx.stroke();
     ctx.restore();
   });
 
-  // Landing Gear
+  // Landing gear
   if (gearOut) {
     ctx.strokeStyle = "#15803d";
     ctx.lineWidth = 2.2;
-    ctx.beginPath(); ctx.moveTo(-14, 7); ctx.lineTo(-20, 20); ctx.lineTo(-10, 20); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(14, 7); ctx.lineTo(20, 20); ctx.lineTo(10, 20); ctx.stroke();
-  } else {
-    ctx.strokeStyle = "#64748b";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(-12, 6); ctx.lineTo(-15, 10); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(12, 6); ctx.lineTo(15, 10); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-10, 6); ctx.lineTo(-14, 15); ctx.lineTo(-18, 15);
+    ctx.moveTo(10, 6); ctx.lineTo(14, 15); ctx.lineTo(18, 15);
+    ctx.stroke();
   }
-
-  // Live Force Vectors (for main drone only)
-  if (alpha === 1) {
-    const tLen = Math.min(50, (thrustN / MAX_THRUST) * 50);
-    if (tLen > 2) {
-      ctx.strokeStyle = "#1d4ed8";
-      ctx.lineWidth = 2.2;
-      ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(0, -10 - tLen); ctx.stroke();
-      ctx.fillStyle = "#1d4ed8";
-      ctx.beginPath();
-      ctx.moveTo(0, -14 - tLen);
-      ctx.lineTo(-4, -8 - tLen);
-      ctx.lineTo(4, -8 - tLen);
-      ctx.closePath(); ctx.fill();
-    }
-    const wLen = (DRONE_WEIGHT / MAX_THRUST) * 50;
-    ctx.strokeStyle = "rgba(185, 28, 28, 0.7)";
-    ctx.lineWidth = 1.8;
-    ctx.beginPath(); ctx.moveTo(0, 10); ctx.lineTo(0, 10 + wLen); ctx.stroke();
-  }
-
   ctx.restore();
 }
 
 function drawScene() {
-  resizeCanvases();
   const W = droneCanvas.width, H = droneCanvas.height;
-  if (!W || !H) return;
-
+  if (W === 0 || H === 0) return;
   dctx.clearRect(0, 0, W, H);
-  const cfg = getActiveMilestoneConfig();
-  const curStage = cfg.stages[sim.stageIdx];
-  const sp = curStage.setpoint;
 
-  // Clean technical sky background
+  // Clean light sky gradient
   const sky = dctx.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0, "#f8fafc");
-  sky.addColorStop(1, "#e2e8f0");
+  sky.addColorStop(0, "#f1f5f9");
+  sky.addColorStop(1, "#ffffff");
   dctx.fillStyle = sky;
   dctx.fillRect(0, 0, W, H);
 
-  const groundY = H - 34;
+  const groundY = H - 32;
   const rulerX = 44;
 
-  // Horizontal altitude gridlines
+  // Altitude Grid & Ruler
   dctx.font = "10px 'JetBrains Mono', monospace";
   for (let m = 0; m <= 60; m += 10) {
     const ry = altToY(m, H);
-    dctx.strokeStyle = m === 0 ? "#94a3b8" : "#cbd5e1";
-    dctx.lineWidth = m === 0 ? 1.5 : 0.75;
+    dctx.strokeStyle = m === 0 ? "#94a3b8" : "#e2e8f0";
+    dctx.lineWidth = m === 0 ? 1.5 : 1;
     dctx.beginPath(); dctx.moveTo(rulerX, ry); dctx.lineTo(W, ry); dctx.stroke();
-
-    dctx.fillStyle = "#475569";
+    dctx.fillStyle = "#64748b";
     dctx.textAlign = "right";
     dctx.fillText(m + "m", rulerX - 6, ry + 3);
   }
 
-  // Shaded ±1.2 m Hold Tolerance Band around Setpoint
-  if (curStage.hover > 0) {
-    const bandTop = altToY(Math.min(WORLD_MAX_ALT, sp + 1.2), H);
-    const bandBot = altToY(Math.max(0, sp - 1.2), H);
+  // Ground surface & Helipad
+  dctx.fillStyle = "#e2e8f0";
+  dctx.fillRect(0, groundY, W, H - groundY);
+  const cx = W / 2;
+  dctx.fillStyle = "#0f2942";
+  dctx.fillRect(cx - 38, groundY - 3, 76, 6);
+  dctx.fillStyle = "#ffffff";
+  dctx.font = "bold 9px 'JetBrains Mono', monospace";
+  dctx.textAlign = "center";
+  dctx.fillText("PAD 0m", cx, groundY + 14);
+
+  const ms = getActiveMilestone();
+  const stage = ms.stages[sim.stageIdx];
+  const sp = stage.setpoint;
+  const spY = altToY(sp, H);
+
+  // Shaded +/- 1.2m Hold Band around Setpoint
+  if (!stage.isLanding) {
+    const topBandY = altToY(sp + HOLD_BAND_M, H);
+    const botBandY = altToY(Math.max(0, sp - HOLD_BAND_M), H);
     dctx.fillStyle = sim.inHoldBand ? "rgba(21, 128, 61, 0.14)" : "rgba(29, 78, 216, 0.08)";
-    dctx.fillRect(rulerX, bandTop, W - rulerX, bandBot - bandTop);
+    dctx.fillRect(rulerX, topBandY, W - rulerX, botBandY - topBandY);
   }
 
-  // Ground pad strip
-  dctx.fillStyle = "#cbd5e1";
-  dctx.fillRect(0, groundY, W, H - groundY);
-  dctx.strokeStyle = "#0f2942";
-  dctx.lineWidth = 2;
-  dctx.beginPath(); dctx.moveTo(0, groundY); dctx.lineTo(W, groundY); dctx.stroke();
-
-  // Landing Pad "H"
-  const padX = W / 2;
-  dctx.fillStyle = "#0f2942";
-  dctx.fillRect(padX - 42, groundY - 4, 84, 5);
-  dctx.fillStyle = "#0f2942";
-  dctx.font = "bold 10px 'JetBrains Mono', monospace";
-  dctx.textAlign = "center";
-  dctx.fillText("LANDING PAD (0.0 m)", padX, groundY + 19);
-
-  // Setpoint Dashed Line
-  const spY = altToY(sp, H);
-  dctx.save();
-  dctx.setLineDash([7, 4]);
-  dctx.strokeStyle = sim.inHoldBand ? "#15803d" : "#b91c1c";
-  dctx.lineWidth = 1.6;
-  dctx.beginPath(); dctx.moveTo(rulerX, spY); dctx.lineTo(W - 10, spY); dctx.stroke();
-  dctx.restore();
-
-  dctx.fillStyle = sim.inHoldBand ? "#15803d" : "#b91c1c";
+  // Dashed Setpoint Line
+  dctx.setLineDash([6, 4]);
+  dctx.strokeStyle = "#b91c1c";
+  dctx.lineWidth = 1.5;
+  dctx.beginPath(); dctx.moveTo(rulerX, spY); dctx.lineTo(W - 155, spY); dctx.stroke();
+  dctx.setLineDash([]);
+  dctx.fillStyle = "#b91c1c";
   dctx.font = "bold 10px 'JetBrains Mono', monospace";
   dctx.textAlign = "left";
-  dctx.fillText(`TARGET: ${sp.toFixed(1)} m`, rulerX + 8, Math.max(16, spY - 6));
+  dctx.fillText(`SET ${sp}m`, rulerX + 6, spY - 4);
 
-  // Wind Gust Readout
-  if (windActive && Math.abs(windForce) > 0.05) {
+  // Live Wind Vector Indicator
+  const activeW = windTimer < windDuration ? windForce : 0;
+  if (simRunning && Math.abs(activeW) > 0.15) {
+    const wx = rulerX + 75, wy = H * 0.45;
+    const dir = activeW > 0 ? -1 : 1; // positive wind pushes upward (-Y in canvas)
+    dctx.save();
+    dctx.strokeStyle = "#b91c1c";
     dctx.fillStyle = "#b91c1c";
+    dctx.lineWidth = 2;
+    dctx.beginPath();
+    dctx.moveTo(wx, wy - dir * 16);
+    dctx.lineTo(wx, wy + dir * 16);
+    dctx.stroke();
+    dctx.beginPath();
+    dctx.moveTo(wx, wy + dir * 20);
+    dctx.lineTo(wx - 5, wy + dir * 12);
+    dctx.lineTo(wx + 5, wy + dir * 12);
+    dctx.closePath();
+    dctx.fill();
     dctx.font = "bold 10px 'JetBrains Mono', monospace";
-    dctx.fillText(`WIND GUST: ${windForce > 0 ? "+" : ""}${windForce.toFixed(2)} N`, rulerX + 8, 48);
-  }
-
-  // Live Tuning Prompt during Final 20m -> 0m Descent
-  if (running && sp === 0 && sim.stageIdx === cfg.stages.length - 1) {
-    dctx.fillStyle = "#1d4ed8";
-    dctx.font = "bold 10px 'JetBrains Mono', monospace";
-    dctx.textAlign = "left";
-    dctx.fillText("FINAL DESCENT (20m → 0m): Adjust Kp / Ki / Kd live to brake ≤ 0.6 m/s", rulerX + 8, 64);
+    dctx.textAlign = "center";
+    dctx.fillText(`WIND ${activeW > 0 ? "+" : ""}${activeW.toFixed(1)}N`, wx, wy - 24);
+    dctx.restore();
   }
 
   // Ghost Drone
-  if (showGhost && running) {
-    drawDroneBody(dctx, padX - 65, altToY(ghost.altitude, H), 0.35, ghost.gearDeployed, rotorAngle, DRONE_WEIGHT);
+  if (showGhost && simRunning) {
+    const gy = altToY(ghost.altitude, H);
+    drawDroneSprite(dctx, cx + 42, gy, 0.32, ghost.gearDeployed, rotorAngle * 1.2);
   }
 
   // Main Drone
-  const droneY = altToY(sim.altitude, H) - (sim.gearDeployed ? 14 : 6);
-  drawDroneBody(dctx, padX, droneY, 1, sim.gearDeployed, rotorAngle, sim.thrust);
+  const droneY = altToY(sim.altitude, H);
+  // Thrust plume proportional to commanded Thrust T
+  if (simRunning && sim.lastT > 0.5) {
+    const plumeH = (sim.lastT / MAX_THRUST) * 26;
+    dctx.fillStyle = "rgba(29, 78, 216, 0.22)";
+    dctx.beginPath();
+    dctx.moveTo(cx - 18, droneY + 5);
+    dctx.lineTo(cx + 18, droneY + 5);
+    dctx.lineTo(cx, droneY + 5 + plumeH);
+    dctx.closePath();
+    dctx.fill();
+  }
+  drawDroneSprite(dctx, cx, droneY, 1.0, sim.gearDeployed, rotorAngle);
 
-  // Animated Hold & Timer Ring beside Drone when holding or accumulating hold time
-  if (running && curStage.hover > 0 && (sim.inHoldBand || sim.hoverTimer > 0.05)) {
-    const ringX = Math.min(W - 185, padX + 82);
-    const ringY = Math.max(46, Math.min(groundY - 48, droneY));
-    drawHoldTimerRing(
-      dctx,
-      ringX,
-      ringY,
-      sim.hoverTimer / curStage.hover,
-      sim.hoverTimer,
-      curStage.hover,
-      sim.inHoldBand
-    );
+  // Animated Circular Hold Timer Ring + Sweeping Stopwatch Hand beside Drone
+  if (simRunning && !stage.isLanding && sim.holdTimer > 0.05) {
+    const prog = Math.min(1, sim.holdTimer / stage.hold);
+    const rx = cx + 48;
+    const ry = droneY;
+    const rad = 14;
+    dctx.save();
+    // Track circle
+    dctx.beginPath();
+    dctx.arc(rx, ry, rad, 0, Math.PI * 2);
+    dctx.fillStyle = "rgba(255,255,255,0.92)";
+    dctx.fill();
+    dctx.strokeStyle = "#cbd5e1";
+    dctx.lineWidth = 3;
+    dctx.stroke();
+
+    // Sweeping arc
+    dctx.beginPath();
+    dctx.arc(rx, ry, rad, -Math.PI / 2, -Math.PI / 2 + prog * Math.PI * 2);
+    dctx.strokeStyle = sim.inHoldBand ? "#15803d" : "#1d4ed8";
+    dctx.lineWidth = 3;
+    dctx.stroke();
+
+    // Stopwatch hand
+    const handAngle = -Math.PI / 2 + prog * Math.PI * 2;
+    dctx.beginPath();
+    dctx.moveTo(rx, ry);
+    dctx.lineTo(rx + Math.cos(handAngle) * (rad - 4), ry + Math.sin(handAngle) * (rad - 4));
+    dctx.strokeStyle = "#0f2942";
+    dctx.lineWidth = 1.8;
+    dctx.stroke();
+
+    // Seconds label
+    dctx.fillStyle = "#0f2942";
+    dctx.font = "bold 9px 'JetBrains Mono', monospace";
+    dctx.textAlign = "left";
+    dctx.fillText(`${sim.holdTimer.toFixed(1)}s`, rx + 18, ry + 3);
+    dctx.restore();
+  }
+
+  // Live Tuning Prompt during Final 20m -> 0m Touchdown Glide
+  if (simRunning && stage.isLanding) {
+    dctx.fillStyle = "rgba(15, 41, 66, 0.9)";
+    dctx.font = "bold 11px Inter, sans-serif";
+    dctx.textAlign = "center";
+    dctx.fillText("Final Glide (20m → 0m): Adjust Kp / Ki / Kd live for soft touchdown (<= 0.6 m/s)", cx, H - 46);
   }
 }
 
 function drawGraph() {
   const W = graphCanvas.width, H = graphCanvas.height;
-  if (!W || !H) return;
-
+  if (W === 0 || H === 0) return;
   gctx.clearRect(0, 0, W, H);
   gctx.fillStyle = "#ffffff";
   gctx.fillRect(0, 0, W, H);
 
-  const pad = { l: 40, r: 10, t: 22, b: 20 };
+  const pad = { l: 38, r: 34, t: 22, b: 18 };
   const pw = W - pad.l - pad.r;
   const ph = H - pad.t - pad.b;
 
-  // Grid & Y labels
-  gctx.font = "10px 'JetBrains Mono', monospace";
+  // Grid & Left Axis (Altitude 0-60m) + Right Axis (Thrust 0-30N)
+  gctx.font = "9px 'JetBrains Mono', monospace";
   for (let i = 0; i <= 4; i++) {
     const gy = pad.t + (i / 4) * ph;
     gctx.strokeStyle = "#f1f5f9";
     gctx.lineWidth = 1;
     gctx.beginPath(); gctx.moveTo(pad.l, gy); gctx.lineTo(pad.l + pw, gy); gctx.stroke();
 
-    const altVal = Math.round(WORLD_MAX_ALT * (1 - i / 4));
-    gctx.fillStyle = "#64748b";
+    gctx.fillStyle = "#1d4ed8";
     gctx.textAlign = "right";
-    gctx.fillText(`${altVal}m`, pad.l - 5, gy + 3);
+    gctx.fillText((60 - i * 15) + "m", pad.l - 4, gy + 3);
+
+    gctx.fillStyle = "#0f2942";
+    gctx.textAlign = "left";
+    gctx.fillText((30 - i * 7.5).toFixed(0) + "N", pad.l + pw + 4, gy + 3);
   }
 
-  // Axis frame
-  gctx.strokeStyle = "#cbd5e1";
-  gctx.lineWidth = 1;
-  gctx.strokeRect(pad.l, pad.t, pw, ph);
-
-  if (gAlt.length < 2) {
-    gctx.fillStyle = "#94a3b8";
-    gctx.textAlign = "center";
-    gctx.fillText("Real-Time Altitude & Thrust Telemetry (launches on start)", pad.l + pw / 2, pad.t + ph / 2);
-    return;
-  }
-
+  if (gAlt.length < 2) return;
   const n = gAlt.length;
-  function plotSeries(arr, minV, maxV, color, dashed) {
-    gctx.save();
+
+  function plot(data, maxVal, color, dashed) {
     gctx.beginPath();
     gctx.strokeStyle = color;
-    gctx.lineWidth = 1.8;
-    if (dashed) gctx.setLineDash([5, 3]);
+    gctx.lineWidth = 1.7;
+    gctx.setLineDash(dashed ? [5, 3] : []);
     for (let i = 0; i < n; i++) {
       const x = pad.l + (i / (n - 1)) * pw;
-      const clamped = Math.max(minV, Math.min(maxV, arr[i]));
-      const y = pad.t + (1 - (clamped - minV) / (maxV - minV)) * ph;
+      const v = Math.max(0, Math.min(maxVal, data[i]));
+      const y = pad.t + (1 - v / maxVal) * ph;
       if (i === 0) gctx.moveTo(x, y);
       else gctx.lineTo(x, y);
     }
     gctx.stroke();
-    gctx.restore();
+    gctx.setLineDash([]);
   }
 
-  plotSeries(gSet, 0, WORLD_MAX_ALT, "#b91c1c", true);
-  plotSeries(gThrust, 0, MAX_THRUST, "rgba(15, 41, 66, 0.45)", false);
-  plotSeries(gAlt, 0, WORLD_MAX_ALT, "#1d4ed8", false);
-
-  // Time axis label
-  gctx.fillStyle = "#64748b";
-  gctx.textAlign = "center";
-  gctx.fillText(`Time: ${gTime[0].toFixed(1)}s — ${gTime[n - 1].toFixed(1)}s`, pad.l + pw / 2, H - 4);
+  plot(gSet, 60, "#b91c1c", true);
+  plot(gThrust, 30, "#0f2942", false);
+  plot(gAlt, 60, "#1d4ed8", false);
 }
 
-function simLoop(ts) {
-  if (lastFrameTs === null) lastFrameTs = ts;
-  const elapsed = Math.min(0.05, (ts - lastFrameTs) / 1000);
-  lastFrameTs = ts;
-  animClock += elapsed;
-
-  if (running && !paused && !crashed && !missionDone) {
-    accumulator += elapsed * simSpeed;
-    let guard = 0;
-    while (accumulator >= FIXED_DT && guard < 12) {
-      stepPhysics(FIXED_DT);
-      accumulator -= FIXED_DT;
-      guard++;
-      if (crashed || missionDone) break;
-    }
-  }
-
-  drawScene();
-  drawGraph();
-  rafId = requestAnimationFrame(simLoop);
-}
-
-function startSimulationLoop() {
-  if (rafId !== null) return;
-  lastFrameTs = null;
-  accumulator = 0;
-  rafId = requestAnimationFrame(simLoop);
-}
-
-function stopSimulationLoop() {
-  if (rafId !== null) {
-    cancelAnimationFrame(rafId);
-    rafId = null;
-  }
-}
-
-window.addEventListener("resize", () => {
+// ── ANIMATION LOOP ─────────────────────────────────────────────────────────
+function animationLoop() {
   if (currentPhase === 4) {
+    if (simRunning && !simPaused && !simCrashed && !simFinished) {
+      for (let s = 0; s < simSpeed; s++) {
+        if (!simRunning || simCrashed || simFinished) break;
+        stepSimulationFrame();
+      }
+      updateTelemetryHUD();
+    }
+    resizeCanvases();
     drawScene();
     drawGraph();
   }
-});
+  requestAnimationFrame(animationLoop);
+}
 
-// ── PHASE 6: LAB REPORT & C++ FIRMWARE EXPORT ──────────────────────────────
-function generateCppFirmware(gains) {
+// ── PHASE 6: LAB REPORT & C++ FIRMWARE EXPORTER ────────────────────────────
+function renderLabReportAndCpp() {
+  if (!currentStudent) return;
+  document.getElementById("rptName").textContent = currentStudent.name;
+  document.getElementById("rptRoll").textContent = currentStudent.roll;
+  document.getElementById("rptEmail").textContent = currentStudent.email;
+  document.getElementById("rptQuizScore").textContent = `${currentStudent.quizBestScore || 0} / ${QUIZ_QUESTIONS.length}`;
+  document.getElementById("rptTimestamp").textContent = new Date().toLocaleString();
+
+  let sum = 0;
+  const rows = MILESTONE_CONFIGS.map(ms => {
+    const rec = currentStudent.milestones[ms.id] || { passed: false, bestScore: 0, trials: 0, bestGains: null };
+    sum += rec.bestScore || 0;
+    const gStr = rec.bestGains ? `Kp=${rec.bestGains.kp}, Ki=${rec.bestGains.ki}, Kd=${rec.bestGains.kd}` : "—";
+    const statusBadge = rec.passed
+      ? `<span class="text-[#15803d] font-bold">PASSED</span>`
+      : `<span class="text-[#b91c1c] font-semibold">PENDING</span>`;
+    return `
+      <tr>
+        <td class="py-2.5 px-3 font-semibold text-[#0f2942]">${escapeHtml(ms.title)}</td>
+        <td class="py-2.5 px-3">&ge; ${ms.passCutoff}</td>
+        <td class="py-2.5 px-3">${statusBadge}</td>
+        <td class="py-2.5 px-3 font-bold">${rec.bestScore || 0} / 100</td>
+        <td class="py-2.5 px-3">${gStr}</td>
+        <td class="py-2.5 px-3">${rec.trials || 0}</td>
+      </tr>`;
+  }).join("");
+
+  document.getElementById("rptMilestonesTableBody").innerHTML = rows;
+  document.getElementById("rptOverallGrade").textContent = `${(sum / 4).toFixed(1)} / 100`;
+
+  const unlockedCpp = isM4Passed() && currentStudent.quizPassed;
+  document.getElementById("cppLockedNotice").classList.toggle("hidden", unlockedCpp);
+  document.getElementById("cppCodeWrapper").classList.toggle("hidden", !unlockedCpp);
+  document.getElementById("cppExportActions").classList.toggle("hidden", !unlockedCpp);
+
+  if (unlockedCpp) {
+    document.getElementById("cppCodePreview").textContent = generateCppFirmware();
+  }
+}
+
+function generateCppFirmware() {
+  const g = (currentStudent && currentStudent.milestones[4] && currentStudent.milestones[4].bestGains) || { kp: 3.0, ki: 1.0, kd: 4.2 };
+  const sName = currentStudent ? currentStudent.name : "Student";
+  const sRoll = currentStudent ? currentStudent.roll : "ROLL";
   return `// ============================================================================
-// CHANAKYA UNIVERSITY — CONTROL ENGINEERING LAB
-// Autonomous Quadcopter Outer-Loop Altitude PID Firmware (C++ / Arduino)
-// Student: ${currentStudent.name} (${currentStudent.rollNo} | ${currentStudent.email || ""})
-// Physical Model: m = 1.50 kg, W = 14.72 N, T_max = 30.00 N
+// CHANAKYA UNIVERSITY — CONTROL ENGINEERING
+// Autonomous Vertical Altitude PID Outer-Loop Controller (5-Stage Profile)
+// Student: ${sName} (${sRoll})
+// Drone Model: m = 1.50 kg, W = 14.72 N, T_max = 30.00 N
+// Profile: 50m (10s) -> 40m (10s) -> 30m (10s) -> 20m [Gear+10s] -> 0m Landing
 // ============================================================================
 
 #include <Arduino.h>
@@ -2917,107 +2841,75 @@ function generateCppFirmware(gains) {
 
 Servo landingGearServo;
 
-// Verified PID Gains from Milestone 4 (>= 80/100)
-const float Kp = ${gains.kp.toFixed(2)}f; // N/m
-const float Ki = ${gains.ki.toFixed(2)}f; // N/(m*s)
-const float Kd = ${gains.kd.toFixed(2)}f; // N*s/m
+const float DRONE_MASS_KG  = 1.50f;
+const float DRONE_WEIGHT_N = 14.715f;
+const float MAX_THRUST_N   = 30.00f;
 
-// Mission Setpoints (Meters): 50m -> 40m -> 30m -> 20m [Gear] -> 0m (Direct Descent)
 const float SETPOINTS[] = {50.0f, 40.0f, 30.0f, 20.0f, 0.0f};
-const int NUM_STAGES = 5;
-const float HOLD_DURATION = 10.0f;
+const int   NUM_STAGES  = 5;
+const float HOLD_SEC    = 10.0f;
+const float HOLD_BAND_M = 1.2f;
 
-int currentStage = 0;
+// Verified Student PID Gains from Milestone 4
+float Kp = ${g.kp.toFixed(2)}f;  // N/m
+float Ki = ${g.ki.toFixed(2)}f;  // N/(m*s)
+float Kd = ${g.kd.toFixed(2)}f;  // N*s/m
+
+int   currentStage = 0;
 float integralTerm = 0.0f;
-float holdTimer = 0.0f;
-bool gearDeployed = false;
-bool missionComplete = false;
+float holdTimer    = 0.0f;
+bool  gearDeployed = false;
+bool  landed       = false;
 
-// Outer-loop Vertical Thrust Controller (Runs at 50-60 Hz)
-float computeVerticalThrust(float altitude, float velocity, float dt) {
-  if (missionComplete) return 0.0f;
+// Runs at 50-60 Hz inside Outer Altitude Loop (Inner Attitude Loop runs at 400-1000 Hz)
+float computeAltitudeThrustN(float altZ, float velZ, float dt) {
+  if (landed) return 0.0f;
 
-  float target = SETPOINTS[currentStage];
-  float error = target - altitude;
+  float targetZ = SETPOINTS[currentStage];
+  float error   = targetZ - altZ;
 
-  // Anti-windup integral clamping
-  integralTerm = constrain(integralTerm + error * dt, -45.0f, 45.0f);
+  // Anti-windup integral clamp
+  integralTerm = constrain(integralTerm + error * dt, -35.0f, 35.0f);
 
+  // Derivative-on-measurement (-Kd * velZ) prevents setpoint kick
   float P = Kp * error;
   float I = Ki * integralTerm;
-  float D = -Kd * velocity; // Derivative-on-measurement
+  float D = -Kd * velZ;
 
-  float thrustN = constrain(P + I + D, 0.0f, 30.0f);
+  float thrustN = constrain(P + I + D, 0.0f, MAX_THRUST_N);
 
-  // Deploy landing gear at 20m milestone
-  if (currentStage >= 3 && !gearDeployed && altitude <= 21.5f) {
+  // Deploy landing gear at 20m milestone (stage index 3)
+  if (currentStage >= 3 && !gearDeployed && altZ <= 22.0f) {
     landingGearServo.write(90);
     gearDeployed = true;
   }
 
-  // Stage progression logic
+  // Stage progression
   if (currentStage < NUM_STAGES - 1) {
-    if (abs(error) <= 1.2f && abs(velocity) <= 0.8f) {
+    if (fabs(error) <= HOLD_BAND_M && fabs(velZ) <= 1.2f) {
       holdTimer += dt;
-      if (holdTimer >= HOLD_DURATION) {
+      if (holdTimer >= HOLD_SEC) {
         currentStage++;
         holdTimer = 0.0f;
       }
+    } else {
+      holdTimer = max(0.0f, holdTimer - dt * 0.5f);
     }
   } else {
-    if (altitude <= 0.15f && abs(velocity) <= 0.60f) {
-      missionComplete = true;
+    // Final direct descent 20m -> 0m touchdown detection
+    if (altZ <= 0.10f && fabs(velZ) <= 0.60f) {
+      landed = true;
+      return 0.0f;
     }
   }
+
   return thrustN;
-}`;
+}
+`;
 }
 
-function renderLabReportAndCpp() {
-  if (!currentStudent) return;
-  document.getElementById("rptName").textContent = currentStudent.name || "—";
-  document.getElementById("rptRoll").textContent = currentStudent.rollNo;
-  document.getElementById("rptEmail").textContent = currentStudent.email || "—";
-  document.getElementById("rptQuizScore").textContent = `${currentStudent.quizBestScore || 0} / 6`;
-  document.getElementById("rptTimestamp").textContent = new Date().toLocaleString();
-
-  let scoreSum = 0;
-  const rows = MILESTONE_CONFIGS.map(cfg => {
-    const ms = currentStudent.milestones[cfg.id];
-    scoreSum += ms.bestScore || 0;
-    const gainsStr = ms.bestGains
-      ? `${ms.bestGains.kp.toFixed(2)}, ${ms.bestGains.ki.toFixed(2)}, ${ms.bestGains.kd.toFixed(2)}`
-      : "—";
-    const statusBadge = ms.passed
-      ? `<span class="text-[#15803d] font-bold">PASSED</span>`
-      : `<span class="text-slate-500">PENDING</span>`;
-    return `
-      <tr>
-        <td class="py-2.5 px-3 font-sans font-semibold text-[#0f2942]">${escapeHTML(cfg.shortTitle)}</td>
-        <td class="py-2.5 px-3">&ge; ${cfg.passCutoff}</td>
-        <td class="py-2.5 px-3">${statusBadge}</td>
-        <td class="py-2.5 px-3 font-bold">${ms.bestScore || 0} / 100</td>
-        <td class="py-2.5 px-3">${gainsStr}</td>
-        <td class="py-2.5 px-3">${ms.attempts || 0}</td>
-      </tr>
-    `;
-  }).join("");
-
-  document.getElementById("rptMilestonesTableBody").innerHTML = rows;
-  document.getElementById("rptOverallGrade").textContent = `${(scoreSum / 4).toFixed(1)} / 100`;
-
-  const m4 = currentStudent.milestones[4];
-  const unlocked = m4 && m4.passed && m4.bestGains && currentStudent.quizPassed;
-  document.getElementById("cppLockedNotice").classList.toggle("hidden", !!unlocked);
-  document.getElementById("cppCodeWrapper").classList.toggle("hidden", !unlocked);
-  document.getElementById("cppExportActions").classList.toggle("hidden", !unlocked);
-  if (unlocked) {
-    document.getElementById("cppCodePreview").textContent = generateCppFirmware(m4.bestGains);
-  }
-}
-
-window.copyCppCode = function() {
-  const code = document.getElementById("cppCodePreview").textContent;
+function copyCppCode() {
+  const code = generateCppFirmware();
   const ta = document.createElement("textarea");
   ta.value = code;
   document.body.appendChild(ta);
@@ -3027,47 +2919,42 @@ window.copyCppCode = function() {
   const btn = document.getElementById("btnCopyCpp");
   btn.textContent = "Copied!";
   setTimeout(() => { btn.textContent = "Copy C++ Code"; }, 1800);
-};
+}
 
-window.downloadCppCode = function() {
-  const code = document.getElementById("cppCodePreview").textContent;
-  const blob = new Blob([code], { type: "text/plain" });
-  const url = URL.createObjectURL(blob);
+function downloadCppCode() {
+  const blob = new Blob([generateCppFirmware()], { type: "text/plain" });
   const a = document.createElement("a");
-  a.href = url;
-  a.download = `${currentStudent.rollNo}_Drone_PID_Controller.ino`;
+  a.href = URL.createObjectURL(blob);
+  a.download = `PID_Drone_${currentStudent ? currentStudent.roll : "Firmware"}.ino`;
   a.click();
-  URL.revokeObjectURL(url);
-};
+}
 
-window.downloadStandaloneReport = function() {
-  const area = document.getElementById("printableReportArea").innerHTML;
-  const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>PID Lab Report — ${escapeHTML(currentStudent.rollNo)}</title>
-  <script src="https://cdn.tailwindcss.com"><\/script></head><body class="p-8 bg-white text-[#0f2942] font-sans">${area}</body></html>`;
+function downloadStandaloneReport() {
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>PID Lab Report — ${currentStudent.roll}</title>
+  <style>body{font-family:Inter,Arial,sans-serif;padding:32px;color:#0f2942;max-width:900px;margin:auto}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #cbd5e1;padding:8px;text-align:left;font-size:13px}th{background:#f1f5f9}</style>
+  </head><body>${document.getElementById("printableReportArea").innerHTML}</body></html>`;
   const blob = new Blob([html], { type: "text/html" });
-  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url;
-  a.download = `${currentStudent.rollNo}_Control_Eng_PID_Report.html`;
+  a.href = URL.createObjectURL(blob);
+  a.download = `ControlEng_PID_Report_${currentStudent.roll}.html`;
   a.click();
-  URL.revokeObjectURL(url);
-};
+}
 
-// ── FACULTY PORTAL (ANALYTICS + ROSTER MANAGER) ────────────────────────────
-window.openFacultyPinModal = function() {
+// ── FACULTY PORTAL (PIN, ANALYTICS & ROSTER MANAGER) ───────────────────────
+function openFacultyPinModal() {
   document.getElementById("facultyPinInput").value = "";
   document.getElementById("facultyPinError").classList.add("hidden");
   document.getElementById("facultyPinModal").classList.remove("hidden");
   document.getElementById("facultyPinModal").classList.add("flex");
   setTimeout(() => document.getElementById("facultyPinInput").focus(), 50);
-};
+}
 
-window.closeFacultyPinModal = function() {
+function closeFacultyPinModal() {
   document.getElementById("facultyPinModal").classList.add("hidden");
   document.getElementById("facultyPinModal").classList.remove("flex");
-};
+}
 
-window.verifyFacultyPin = function(e) {
+function verifyFacultyPin(e) {
   e.preventDefault();
   const pin = document.getElementById("facultyPinInput").value.trim();
   if (pin !== FACULTY_PIN) {
@@ -3075,13 +2962,15 @@ window.verifyFacultyPin = function(e) {
     return;
   }
   closeFacultyPinModal();
-  enterFacultyPortal();
-};
+  openFacultyPortal();
+}
 
-function enterFacultyPortal() {
-  stopSimulationLoop();
-  document.getElementById("mainHeader").classList.add("hidden");
-  showOnlyView("facultyView");
+function openFacultyPortal() {
+  ["phase1View", "phase2View", "phase3View", "phase4View", "phase5View", "phase6View", "mainHeader"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add("hidden");
+  });
+  document.getElementById("facultyView").classList.remove("hidden");
   switchFacultyTab("analytics");
 
   if (firebaseReady && db) {
@@ -3092,6 +2981,8 @@ function enterFacultyPortal() {
       snap.forEach(d => studentAnalyticsCache.push(d.data()));
       saveLocalCaches();
       renderFacultyKPIsAndTable();
+    }, err => {
+      console.warn("Analytics listener error:", err);
     });
     unsubRoster = onSnapshot(getRosterCol(), snap => {
       authorizedRosterCache = [];
@@ -3099,69 +2990,65 @@ function enterFacultyPortal() {
       saveLocalCaches();
       renderFacultyKPIsAndTable();
       renderRosterTable();
+    }, err => {
+      console.warn("Roster listener error:", err);
     });
   }
   renderFacultyKPIsAndTable();
   renderRosterTable();
 }
 
-window.exitFacultyPortal = function() {
+function exitFacultyPortal() {
   if (unsubAnalytics) { unsubAnalytics(); unsubAnalytics = null; }
   if (unsubRoster) { unsubRoster(); unsubRoster = null; }
-  showOnlyView("phase1View");
-};
+  document.getElementById("facultyView").classList.add("hidden");
+  document.getElementById("phase1View").classList.remove("hidden");
+}
 
-window.switchFacultyTab = function(tab) {
+function switchFacultyTab(tab) {
   const isAnalytics = tab === "analytics";
   document.getElementById("facultyAnalyticsTab").classList.toggle("hidden", !isAnalytics);
   document.getElementById("facultyRosterTab").classList.toggle("hidden", isAnalytics);
+
   document.getElementById("facTabAnalytics").className = isAnalytics
     ? "px-4 py-2 rounded-lg text-xs font-bold bg-[#0f2942] text-white transition"
     : "px-4 py-2 rounded-lg text-xs font-bold bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 transition";
   document.getElementById("facTabRoster").className = !isAnalytics
     ? "px-4 py-2 rounded-lg text-xs font-bold bg-[#0f2942] text-white transition"
     : "px-4 py-2 rounded-lg text-xs font-bold bg-white text-slate-700 border border-slate-300 hover:bg-slate-50 transition";
-};
+}
 
 function renderFacultyKPIsAndTable() {
-  const totalAuth = authorizedRosterCache.length;
-  const activeCount = studentAnalyticsCache.length;
-  const quizPassed = studentAnalyticsCache.filter(s => s.quizPassed).length;
-  const m4Done = studentAnalyticsCache.filter(s => s.milestones && s.milestones[4] && s.milestones[4].passed).length;
+  document.getElementById("kpiAuthorized").textContent = authorizedRosterCache.length;
+  document.getElementById("kpiActive").textContent = studentAnalyticsCache.length;
+  document.getElementById("kpiQuizPassed").textContent = studentAnalyticsCache.filter(s => s.quizPassed).length;
+  document.getElementById("kpiM4Done").textContent = studentAnalyticsCache.filter(s => s.milestones && s.milestones[4] && s.milestones[4].passed).length;
 
   let avgSum = 0;
   studentAnalyticsCache.forEach(s => {
     const m = s.milestones || {};
     avgSum += ((m[1]?.bestScore || 0) + (m[2]?.bestScore || 0) + (m[3]?.bestScore || 0) + (m[4]?.bestScore || 0)) / 4;
   });
-  const classAvg = activeCount > 0 ? (avgSum / activeCount).toFixed(1) : "0.0";
-
-  document.getElementById("kpiAuthorized").textContent = totalAuth;
-  document.getElementById("kpiActive").textContent = activeCount;
-  document.getElementById("kpiQuizPassed").textContent = quizPassed;
-  document.getElementById("kpiM4Done").textContent = m4Done;
-  document.getElementById("kpiAvgScore").textContent = classAvg;
+  const classAvg = studentAnalyticsCache.length ? (avgSum / studentAnalyticsCache.length) : 0;
+  document.getElementById("kpiAvgScore").textContent = classAvg.toFixed(1);
 
   renderFacultyAnalyticsTable();
 }
 
-window.renderFacultyAnalyticsTable = function() {
-  const query = (document.getElementById("facultySearchInput").value || "").trim().toLowerCase();
-  const filter = document.getElementById("facultyStatusFilter").value;
+function renderFacultyAnalyticsTable() {
   const tbody = document.getElementById("facultyTableBody");
+  const q = (document.getElementById("facultySearchInput").value || "").trim().toLowerCase();
+  const filter = document.getElementById("facultyStatusFilter").value;
 
   const filtered = studentAnalyticsCache.filter(s => {
-    const matchText = !query ||
-      (s.rollNo || "").toLowerCase().includes(query) ||
-      (s.name || "").toLowerCase().includes(query) ||
-      (s.email || "").toLowerCase().includes(query);
+    const matchText = !q || (s.roll || "").toLowerCase().includes(q) || (s.name || "").toLowerCase().includes(q) || (s.email || "").toLowerCase().includes(q);
     if (!matchText) return false;
-    const m4Passed = !!(s.milestones?.[4]?.passed);
-    if (filter === "COMPLETED") return m4Passed && !!s.quizPassed;
-    if (filter === "QUIZ_PENDING") return m4Passed && !s.quizPassed;
-    if (filter === "IN_FLIGHT") return !m4Passed;
+    const m4 = !!(s.milestones && s.milestones[4] && s.milestones[4].passed);
+    if (filter === "COMPLETED") return m4 && s.quizPassed;
+    if (filter === "QUIZ_PENDING") return m4 && !s.quizPassed;
+    if (filter === "IN_FLIGHT") return !m4;
     return true;
-  });
+  }).sort((a, b) => (b.lastActive || "").localeCompare(a.lastActive || ""));
 
   if (filtered.length === 0) {
     tbody.innerHTML = `<tr><td colspan="11" class="py-8 text-center text-slate-500">No matching student records found.</td></tr>`;
@@ -3170,212 +3057,228 @@ window.renderFacultyAnalyticsTable = function() {
 
   tbody.innerHTML = filtered.map(s => {
     const m = s.milestones || {};
-    const totalTrials = (m[1]?.attempts || 0) + (m[2]?.attempts || 0) + (m[3]?.attempts || 0) + (m[4]?.attempts || 0);
+    const mCell = (id) => {
+      const rec = m[id] || { bestScore: 0, passed: false };
+      return `<td class="py-3 px-3 text-center mono font-bold ${rec.passed ? "text-[#15803d]" : "text-slate-600"}">${rec.bestScore || 0}${rec.passed ? " ✓" : ""}</td>`;
+    };
+    const totalTrials = [1, 2, 3, 4].reduce((acc, id) => acc + (m[id]?.trials || 0), 0);
     const bestG = m[4]?.bestGains || m[3]?.bestGains || m[2]?.bestGains || m[1]?.bestGains;
-    const gainStr = bestG ? `${bestG.kp.toFixed(2)} / ${bestG.ki.toFixed(2)} / ${bestG.kd.toFixed(2)}` : "—";
-    const m4Passed = !!(m[4]?.passed);
-    const statusText = (m4Passed && s.quizPassed) ? "Certified" : m4Passed ? "Quiz Pending" : "In Flight";
-    const statusCls = (m4Passed && s.quizPassed)
-      ? "text-[#15803d] bg-green-50 border-green-200"
-      : m4Passed
-        ? "text-[#1d4ed8] bg-blue-50 border-blue-200"
-        : "text-slate-600 bg-slate-100 border-slate-200";
+    const gTxt = bestG ? `${bestG.kp} / ${bestG.ki} / ${bestG.kd}` : "—";
+    const m4Passed = !!(m[4] && m[4].passed);
+    const statusHtml = m4Passed && s.quizPassed
+      ? `<span class="px-2 py-0.5 rounded bg-emerald-50 text-[#15803d] border border-emerald-200 font-bold text-[10px]">CERTIFIED</span>`
+      : (m4Passed
+          ? `<span class="px-2 py-0.5 rounded bg-blue-50 text-[#1d4ed8] border border-blue-200 font-bold text-[10px]">QUIZ PENDING</span>`
+          : `<span class="px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 font-semibold text-[10px]">IN FLIGHT</span>`);
     const lastStr = s.lastActive ? new Date(s.lastActive).toLocaleDateString() : "—";
 
-    const fmtM = (id) => {
-      const rec = m[id];
-      if (!rec || !rec.attempts) return `<span class="text-slate-400">—</span>`;
-      return `<span class="mono font-bold ${rec.passed ? "text-[#15803d]" : "text-[#b91c1c]"}">${rec.bestScore}</span>`;
-    };
-
     return `
-      <tr onclick="openStudentDrillModal('${escapeHTML(s.rollNo)}')" class="hover:bg-slate-50 cursor-pointer transition">
-        <td class="py-3 px-4 mono font-bold text-[#0f2942]">${escapeHTML(s.rollNo)}</td>
+      <tr onclick="openStudentDrillModal('${escapeHtml(s.roll)}')" class="hover:bg-slate-50 cursor-pointer transition">
+        <td class="py-3 px-4 mono font-bold text-[#1d4ed8]">${escapeHtml(s.roll)}</td>
         <td class="py-3 px-4">
-          <div class="font-semibold text-[#0f2942]">${escapeHTML(s.name || "—")}</div>
-          <div class="text-[10px] text-slate-500 mono">${escapeHTML(s.email || "")}</div>
+          <div class="font-semibold text-[#0f2942]">${escapeHtml(s.name || "—")}</div>
+          <div class="text-[10px] text-slate-500">${escapeHtml(s.email || "")}</div>
         </td>
-        <td class="py-3 px-3 text-center">${fmtM(1)}</td>
-        <td class="py-3 px-3 text-center">${fmtM(2)}</td>
-        <td class="py-3 px-3 text-center">${fmtM(3)}</td>
-        <td class="py-3 px-3 text-center">${fmtM(4)}</td>
-        <td class="py-3 px-3 text-center mono">${s.quizBestScore || 0}/6 (${s.quizAttempts || 0})</td>
+        ${mCell(1)}${mCell(2)}${mCell(3)}${mCell(4)}
+        <td class="py-3 px-3 text-center mono ${s.quizPassed ? "text-[#15803d] font-bold" : "text-slate-600"}">${s.quizBestScore || 0}/6 (${s.quizAttempts || 0})</td>
         <td class="py-3 px-3 text-center mono">${totalTrials}</td>
-        <td class="py-3 px-4 mono text-slate-700">${gainStr}</td>
-        <td class="py-3 px-3"><span class="px-2 py-0.5 rounded border text-[10px] font-bold ${statusCls}">${statusText}</span></td>
-        <td class="py-3 px-4 text-right text-slate-500 mono">${lastStr}</td>
-      </tr>
-    `;
+        <td class="py-3 px-4 mono text-[11px]">${gTxt}</td>
+        <td class="py-3 px-3">${statusHtml}</td>
+        <td class="py-3 px-4 text-right text-slate-500">${lastStr}</td>
+      </tr>`;
   }).join("");
-};
+}
 
-window.openStudentDrillModal = function(rollNo) {
-  const s = studentAnalyticsCache.find(st => st.rollNo === rollNo);
+function openStudentDrillModal(roll) {
+  const s = studentAnalyticsCache.find(x => x.roll === roll);
   if (!s) return;
-  document.getElementById("drillRoll").textContent = s.rollNo;
-  document.getElementById("drillName").textContent = s.name || s.email || s.rollNo;
-  document.getElementById("drillMeta").textContent = `${s.email || ""} • Quiz: ${s.quizBestScore || 0}/6 (${s.quizAttempts || 0} attempts) • Last Active: ${new Date(s.lastActive).toLocaleString()}`;
+
+  document.getElementById("drillRoll").textContent = s.roll;
+  document.getElementById("drillName").textContent = s.name || s.roll;
+  document.getElementById("drillMeta").textContent = `${s.email || ""} • Quiz: ${s.quizBestScore || 0}/6 (${s.quizAttempts || 0} attempts)`;
 
   const m = s.milestones || {};
-  const passedCount = [1, 2, 3, 4].filter(id => m[id]?.passed).length;
-  const totalTrials = [1, 2, 3, 4].reduce((acc, id) => acc + (m[id]?.attempts || 0), 0);
+  const passedCount = [1, 2, 3, 4].filter(id => m[id] && m[id].passed).length;
   document.getElementById("drillSummaryText").textContent =
-    `${s.name || s.rollNo} has completed ${passedCount} of 4 flight milestones across ${totalTrials} recorded trial(s) and ${s.quizPassed ? "passed" : "not yet passed"} the post-simulation certification quiz (${s.quizBestScore || 0}/6).`;
+    `${s.name || s.roll} has passed ${passedCount} of 4 flight milestones and scored ${s.quizBestScore || 0}/6 on the post-simulation certification quiz.`;
 
-  document.getElementById("drillMilestoneBars").innerHTML = MILESTONE_CONFIGS.map(cfg => {
-    const rec = m[cfg.id] || { bestScore: 0, passed: false };
+  document.getElementById("drillMilestoneBars").innerHTML = MILESTONE_CONFIGS.map(ms => {
+    const rec = m[ms.id] || { bestScore: 0, passed: false, trials: 0 };
     const pct = Math.min(100, rec.bestScore || 0);
     return `
       <div class="space-y-1">
         <div class="flex justify-between text-xs">
-          <span class="font-semibold text-[#0f2942]">${cfg.shortTitle} (Cutoff &ge; ${cfg.passCutoff})</span>
-          <span class="mono font-bold ${rec.passed ? "text-[#15803d]" : "text-slate-600"}">${rec.bestScore || 0} / 100</span>
+          <span class="font-semibold text-[#0f2942]">${escapeHtml(ms.title)}</span>
+          <span class="mono font-bold ${rec.passed ? "text-[#15803d]" : "text-slate-600"}">${rec.bestScore || 0} / 100 (${rec.trials || 0} trials)</span>
         </div>
-        <div class="relative h-3 bg-white border border-slate-200 rounded-full overflow-hidden">
+        <div class="relative h-2.5 bg-white border border-slate-300 rounded-full overflow-hidden">
           <div class="h-full ${rec.passed ? "bg-[#15803d]" : "bg-[#1d4ed8]"}" style="width:${pct}%"></div>
-          <div class="absolute top-0 bottom-0 w-0.5 bg-[#b91c1c]" style="left:${cfg.passCutoff}%"></div>
+          <div class="absolute top-0 bottom-0 w-0.5 bg-[#b91c1c]" style="left:${ms.passCutoff}%"></div>
         </div>
-      </div>
-    `;
+      </div>`;
   }).join("");
 
-  const trials = s.trials || [];
-  document.getElementById("drillTrialsBody").innerHTML = trials.length === 0
-    ? `<tr><td colspan="8" class="py-4 text-center text-slate-500">No flight trials recorded yet.</td></tr>`
-    : trials.map(t => `
-      <tr>
-        <td class="py-2 px-3">${escapeHTML(t.time)}</td>
-        <td class="py-2 px-3 font-bold">M${t.milestone}</td>
-        <td class="py-2 px-3 font-bold">${t.score}/100</td>
-        <td class="py-2 px-3 ${t.passed ? "text-[#15803d]" : "text-[#b91c1c]"} font-bold">${t.passed ? "PASS" : t.crashed ? "CRASH" : "FAIL"}</td>
-        <td class="py-2 px-3">${t.kp} / ${t.ki} / ${t.kd}</td>
-        <td class="py-2 px-3">${t.overshoot} m</td>
-        <td class="py-2 px-3">${t.sse} m</td>
-        <td class="py-2 px-3">${t.touchdown !== null ? t.touchdown + " m/s" : "—"}</td>
-      </tr>
-    `).join("");
+  const logs = Array.isArray(s.trialLogs) ? s.trialLogs : [];
+  document.getElementById("drillTrialsBody").innerHTML = logs.length
+    ? logs.map(t => `
+        <tr>
+          <td class="py-2 px-3 text-slate-500">${new Date(t.time).toLocaleTimeString()}</td>
+          <td class="py-2 px-3 font-bold">M${t.milestone}</td>
+          <td class="py-2 px-3 font-bold ${t.passed ? "text-[#15803d]" : "text-[#b91c1c]"}">${t.score}</td>
+          <td class="py-2 px-3">${t.crashed ? "CRASH" : (t.passed ? "PASS" : "FAIL")}</td>
+          <td class="py-2 px-3">${t.kp} / ${t.ki} / ${t.kd}</td>
+          <td class="py-2 px-3">${t.overshoot} m</td>
+          <td class="py-2 px-3">${t.sse} m</td>
+          <td class="py-2 px-3">${t.touchdownVel !== null && t.touchdownVel !== undefined ? t.touchdownVel + " m/s" : "—"}</td>
+        </tr>`).join("")
+    : `<tr><td colspan="8" class="py-6 text-center text-slate-500">No flight trials logged yet.</td></tr>`;
 
   document.getElementById("studentDetailModal").classList.remove("hidden");
   document.getElementById("studentDetailModal").classList.add("flex");
-};
+}
 
-window.closeStudentDrillModal = function() {
+function closeStudentDrillModal() {
   document.getElementById("studentDetailModal").classList.add("hidden");
   document.getElementById("studentDetailModal").classList.remove("flex");
-};
+}
 
-// ── ROSTER MANAGEMENT ──────────────────────────────────────────────────────
+// ── ROSTER MANAGER CRUD ────────────────────────────────────────────────────
 function renderRosterTable() {
   const tbody = document.getElementById("rosterTableBody");
   document.getElementById("rosterCountBadge").textContent = `${authorizedRosterCache.length} Students`;
   if (authorizedRosterCache.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="3" class="py-6 text-center text-slate-500">Roster is empty. Add students using the form or CSV import on the left.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="3" class="py-8 text-center text-slate-500">No authorized students added yet. Use the form on the left to add or bulk import your class roster.</td></tr>`;
     return;
   }
-  const sorted = [...authorizedRosterCache].sort((a, b) => a.rollNo.localeCompare(b.rollNo));
+  const sorted = [...authorizedRosterCache].sort((a, b) => (a.roll || "").localeCompare(b.roll || ""));
   tbody.innerHTML = sorted.map(r => `
-    <tr>
-      <td class="py-2.5 px-4 mono font-bold text-[#0f2942]">${escapeHTML(r.rollNo)}</td>
-      <td class="py-2.5 px-4 mono text-slate-700">${escapeHTML(r.email || "")}</td>
+    <tr class="hover:bg-slate-50">
+      <td class="py-2.5 px-4 mono font-bold text-[#0f2942]">${escapeHtml(r.roll)}</td>
+      <td class="py-2.5 px-4 text-slate-700">${escapeHtml(r.email)}</td>
       <td class="py-2.5 px-4 text-right">
-        <button onclick="removeRosterStudent('${escapeHTML(r.rollNo)}')" class="text-[11px] font-semibold text-[#b91c1c] hover:underline">Remove</button>
+        <button onclick="removeRosterStudent('${escapeHtml(r.roll)}')" class="text-xs font-semibold text-[#b91c1c] hover:underline">Remove</button>
       </td>
-    </tr>
-  `).join("");
+    </tr>`).join("");
 }
 
-window.addSingleRosterStudent = async function(e) {
+async function addSingleRosterStudent(e) {
   e.preventDefault();
   const roll = document.getElementById("rosterAddRoll").value.trim().toUpperCase();
   const email = document.getElementById("rosterAddEmail").value.trim().toLowerCase();
   if (!roll || !email) return;
 
-  const rid = normalizeRollId(roll);
-  const idx = authorizedRosterCache.findIndex(r => normalizeRollId(r.rollNo) === rid);
-  if (idx >= 0) authorizedRosterCache[idx] = { rollNo: roll, email };
-  else authorizedRosterCache.push({ rollNo: roll, email });
+  const entry = { roll, email, addedAt: new Date().toISOString() };
+  const idx = authorizedRosterCache.findIndex(r => r.roll === roll);
+  if (idx >= 0) authorizedRosterCache[idx] = entry;
+  else authorizedRosterCache.push(entry);
   saveLocalCaches();
 
   if (firebaseReady && db) {
-    try { await setDoc(getRosterDoc(rid), { rollNo: roll, email }); } catch (err) { console.warn(err); }
+    try {
+      await setDoc(doc(getRosterCol(), roll), entry);
+    } catch (err) {
+      console.warn("Firestore roster add error:", err);
+    }
   }
   document.getElementById("rosterAddRoll").value = "";
   document.getElementById("rosterAddEmail").value = "";
   renderRosterTable();
   renderFacultyKPIsAndTable();
-};
+}
 
-window.removeRosterStudent = async function(rollNo) {
-  const rid = normalizeRollId(rollNo);
-  authorizedRosterCache = authorizedRosterCache.filter(r => normalizeRollId(r.rollNo) !== rid);
-  saveLocalCaches();
-  if (firebaseReady && db) {
-    try { await deleteDoc(getRosterDoc(rid)); } catch (err) { console.warn(err); }
-  }
-  renderRosterTable();
-  renderFacultyKPIsAndTable();
-};
-
-window.bulkImportRoster = async function() {
+async function bulkImportRoster() {
   const raw = document.getElementById("rosterBulkTextarea").value.trim();
-  const msgEl = document.getElementById("rosterImportMsg");
+  const msg = document.getElementById("rosterImportMsg");
   if (!raw) return;
 
-  const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const lines = raw.split(/\r?\n/);
   let count = 0;
   for (const line of lines) {
-    const parts = line.split(",");
+    const parts = line.split(/[,\t]/).map(s => s.trim()).filter(Boolean);
     if (parts.length < 2) continue;
-    const roll = parts[0].trim().toUpperCase();
-    const email = parts[1].trim().toLowerCase();
-    if (!roll || !email) continue;
-    const rid = normalizeRollId(roll);
-    const idx = authorizedRosterCache.findIndex(r => normalizeRollId(r.rollNo) === rid);
-    if (idx >= 0) authorizedRosterCache[idx] = { rollNo: roll, email };
-    else authorizedRosterCache.push({ rollNo: roll, email });
+    const roll = parts[0].toUpperCase();
+    const email = parts[1].toLowerCase();
+    if (!email.includes("@")) continue;
+
+    const entry = { roll, email, addedAt: new Date().toISOString() };
+    const idx = authorizedRosterCache.findIndex(r => r.roll === roll);
+    if (idx >= 0) authorizedRosterCache[idx] = entry;
+    else authorizedRosterCache.push(entry);
+
     if (firebaseReady && db) {
-      try { await setDoc(getRosterDoc(rid), { rollNo: roll, email }); } catch (err) { console.warn(err); }
+      try {
+        await setDoc(doc(getRosterCol(), roll), entry);
+      } catch (err) {
+        console.warn("Bulk import Firestore error for", roll, err);
+      }
     }
     count++;
   }
   saveLocalCaches();
   document.getElementById("rosterBulkTextarea").value = "";
-  msgEl.textContent = `Successfully imported ${count} student(s) into the authorized roster.`;
-  msgEl.className = "text-xs font-medium p-2 rounded-lg bg-green-50 border border-green-200 text-[#15803d]";
-  msgEl.classList.remove("hidden");
+  msg.className = "text-xs font-semibold p-2 rounded-lg bg-emerald-50 border border-emerald-200 text-[#15803d]";
+  msg.textContent = `Successfully imported ${count} student(s) into the authorized roster.`;
+  msg.classList.remove("hidden");
   renderRosterTable();
   renderFacultyKPIsAndTable();
-};
+}
 
-window.exportClassCSV = function() {
-  const headers = ["RollNo", "Name", "RegisteredEmail", "M1_Best", "M2_Best", "M3_Best", "M4_Best", "M4_Passed", "QuizScore", "QuizAttempts", "LastActive"];
-  const rows = studentAnalyticsCache.map(s => [
-    s.rollNo,
-    `"${(s.name || "").replace(/"/g, '""')}"`,
-    s.email || "",
-    s.milestones?.[1]?.bestScore || 0,
-    s.milestones?.[2]?.bestScore || 0,
-    s.milestones?.[3]?.bestScore || 0,
-    s.milestones?.[4]?.bestScore || 0,
-    s.milestones?.[4]?.passed ? "YES" : "NO",
-    s.quizBestScore || 0,
-    s.quizAttempts || 0,
-    s.lastActive || ""
-  ].join(","));
+async function removeRosterStudent(roll) {
+  authorizedRosterCache = authorizedRosterCache.filter(r => r.roll !== roll);
+  saveLocalCaches();
+  if (firebaseReady && db) {
+    try {
+      await deleteDoc(doc(getRosterCol(), roll));
+    } catch (err) {
+      console.warn("Firestore delete roster error:", err);
+    }
+  }
+  renderRosterTable();
+  renderFacultyKPIsAndTable();
+}
+
+function exportClassCSV() {
+  const headers = ["RollNumber", "Name", "Email", "M1_Best", "M2_Best", "M3_Best", "M4_Best", "Quiz_Score", "Quiz_Attempts", "Certified", "LastActive"];
+  const rows = studentAnalyticsCache.map(s => {
+    const m = s.milestones || {};
+    const cert = (m[4]?.passed && s.quizPassed) ? "YES" : "NO";
+    return [
+      s.roll, `"${(s.name || "").replace(/"/g, '""')}"`, s.email || "",
+      m[1]?.bestScore || 0, m[2]?.bestScore || 0, m[3]?.bestScore || 0, m[4]?.bestScore || 0,
+      s.quizBestScore || 0, s.quizAttempts || 0, cert, s.lastActive || ""
+    ].join(",");
+  });
   const csv = [headers.join(","), ...rows].join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url;
-  a.download = "Chanakya_Control_Eng_PID_Analytics.csv";
+  a.href = URL.createObjectURL(blob);
+  a.download = `Chanakya_ControlEng_PID_Analytics_${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
-  URL.revokeObjectURL(url);
-};
+}
 
-// ── INITIALIZE APP ─────────────────────────────────────────────────────────
+function escapeHtml(str) {
+  return String(str || "").replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[ch]));
+}
+
+// ── EXPOSE HANDLERS TO WINDOW & BOOTSTRAP ──────────────────────────────────
+Object.assign(window, {
+  navigatePhase, logoutToLogin, openFacultyPinModal, closeFacultyPinModal,
+  verifyFacultyPin, handleStudentLogin, toggleTheoryModule, zeroPidGains,
+  toggleStartPause, resetSimulation, toggleCoachOverlay, setSimSpeed,
+  onGhostToggleChange, submitQuizAttempt, downloadStandaloneReport,
+  copyCppCode, downloadCppCode, exportClassCSV, exitFacultyPortal,
+  switchFacultyTab, renderFacultyAnalyticsTable, addSingleRosterStudent,
+  bulkImportRoster, removeRosterStudent, openStudentDrillModal,
+  closeStudentDrillModal, selectMilestone, selectQuizOption
+});
+
 window.addEventListener("load", () => {
+  bindGainControls();
+  updateStabilityDiagnostics();
   initCloudBackend();
-  syncGainInputs("sl");
+  requestAnimationFrame(animationLoop);
 });
 </script>
 </body>
